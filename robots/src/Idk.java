@@ -1,4 +1,5 @@
 package kin;
+
 import robocode.*;
 import java.awt.Color;
 
