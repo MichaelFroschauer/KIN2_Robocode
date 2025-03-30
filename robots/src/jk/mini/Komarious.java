@@ -1,4 +1,4 @@
-package voidious.mini;
+package jk.mini;
 
 import robocode.*;
 import robocode.util.Utils;
