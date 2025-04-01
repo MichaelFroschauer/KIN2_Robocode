@@ -1,32 +1,39 @@
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.*;
+import java.security.IdentityScope;
+import java.util.List;
 
 public class Main {
     public static void main(String[] args) throws IOException {
-        String source = "out/production/robots";
-        String dest = "robocode/robots";
+        var source = Path.of("out/production/robots");
+        var destinations = List.of("../robocode/robots", "../robocode-windows/robots");
+        var root = Path.of("");
+        var rootAbs = root.toAbsolutePath();
 
-        Path sourcePath = new File(source).toPath();
+        List<Path> files;
+        for (var targetDir : destinations) {
+            var targetRoot = rootAbs.resolve(targetDir).normalize();
+            try (var stream = Files.walk(source, FileVisitOption.FOLLOW_LINKS)) {
+                stream.filter(x -> !x.getFileName().toString().equals("Main.class")).forEach(path -> {
+                    var p = source.relativize(path);
+                    var file = path.toFile();
+                    var targetPath = targetRoot.resolve(p).normalize().toAbsolutePath();
+                    var targetFile = targetPath.toFile();
 
-        try (var stream = Files.walk(sourcePath, FileVisitOption.FOLLOW_LINKS)) {
-            stream.forEach(path -> {
-                File file = path.toFile();
-                String target = file.toString().replace(source, dest);
-                File targetFile = new File(target);
-                if (file.isDirectory()) {
-                    System.out.println("Creating directory " + targetFile);
-                    targetFile.mkdir();
-                } else {
-                    System.out.println("Copying file " + targetFile);
-                    try {
-                        Files.copy(file.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                    } catch (IOException e) {
-                        e.printStackTrace();
+                    if(file.isDirectory()) {
+                        System.out.println("Creating directory " + targetFile);
+                        targetFile.mkdir();
+                    } else {
+                        System.out.println("Copying file " + file + " to " + targetFile);
+                        try {
+                            Files.copy(file.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
                     }
-                }
-            });
+                });
+            }
         }
-
     }
 }
