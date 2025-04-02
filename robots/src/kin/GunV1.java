@@ -22,7 +22,7 @@ public class GunV1 extends AdvancedRobot {
     // Lock Radar on target
     setTurnRadarRight(2.0 * Utils.normalRelativeAngleDegrees(getHeading() + e.getBearing() - getRadarHeading()));
 
-    int bulletPower = getBulletPower(e.getDistance());
+    var bulletPower = getBulletPower(e.getDistance());
     var bulletSpeed = Rules.getBulletSpeed(bulletPower);
 
     // Target position in relative coordinates
@@ -72,13 +72,14 @@ public class GunV1 extends AdvancedRobot {
     fire(bulletPower);
   }
 
-  private int getBulletPower(double distance) {
-    if (distance > 200 || getEnergy() < 15) {
-      return 1;
-    } else if (distance > 50) {
-      return 2;
-    }
-    return 3;
+  private double getBulletPower(double distance) {
+    return 0.1;
+//    if (distance > 200 || getEnergy() < 15) {
+//      return 1;
+//    } else if (distance > 50) {
+//      return 2;
+//    }
+//    return 3;
   }
 }
 
