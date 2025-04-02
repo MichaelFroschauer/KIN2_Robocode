@@ -141,68 +141,96 @@ public class GunV4_GFSurfer_Merge extends AdvancedRobot {
 
 
 class GFTWave extends Condition {
+  // Static property holding the target location for the wave (where the bullet is aimed at)
   static Point2D targetLocation;
 
+  // The power of the bullet (affects its speed)
   double bulletPower;
+
+  // The position of the robot's gun when the bullet is fired
   Point2D gunLocation;
+
+  // The bearing (angle) between the robot and the target when the bullet is fired
   double bearing;
+
+  // The direction in which the target is moving (left or right)
   double lateralDirection;
 
-  private static final double MAX_DISTANCE = 900;
-  private static final int DISTANCE_INDEXES = 5;
-  private static final int VELOCITY_INDEXES = 5;
-  private static final int BINS = 25;
-  private static final int MIDDLE_BIN = (BINS - 1) / 2;
-  private static final double MAX_ESCAPE_ANGLE = 0.7;
-  private static final double BIN_WIDTH = MAX_ESCAPE_ANGLE / (double)MIDDLE_BIN;
+  // Constants for wave simulation
+  private static final double MAX_DISTANCE = 900;  // Maximum distance for the bullet
+  private static final int DISTANCE_INDEXES = 5;   // Number of bins for distance categorization
+  private static final int VELOCITY_INDEXES = 5;   // Number of bins for velocity categorization
+  private static final int BINS = 25;              // Number of bins to track the opponent's escape angle
+  private static final int MIDDLE_BIN = (BINS - 1) / 2; // Middle bin index used for normalization
+  private static final double MAX_ESCAPE_ANGLE = 0.7; // Maximum angle for predicting escape
+  private static final double BIN_WIDTH = MAX_ESCAPE_ANGLE / (double)MIDDLE_BIN; // Width of each bin
 
+  // A 4-dimensional array to store statistical data based on distance, velocity, and escape angle
   private static int[][][][] statBuffers = new int[DISTANCE_INDEXES][VELOCITY_INDEXES][VELOCITY_INDEXES][BINS];
 
+  // A reference to the statistics buffer for the current wave based on distance, velocity, and last velocity
   private int[] buffer;
+
+  // The robot instance for interaction with the game environment
   private AdvancedRobot robot;
+
+  // The total distance traveled by the bullet
   private double distanceTraveled;
 
+  // Constructor for initializing the GFTWave with the robot instance
   GFTWave(AdvancedRobot _robot) {
     this.robot = _robot;
   }
 
+  // Method to test if the wave has arrived at its target and update the statistics
   public boolean test() {
-    advance();
-    if (hasArrived()) {
-      buffer[currentBin()]++;
-      robot.removeCustomEvent(this);
+    advance();  // Move the wave forward by a small increment
+    if (hasArrived()) {  // Check if the wave has arrived at the target
+      buffer[currentBin()]++;  // Update the statistics for the current "bin" (escape angle)
+      robot.removeCustomEvent(this);  // Remove the custom event once the wave has arrived
     }
     return false;
   }
 
+  // Method to calculate the bearing offset where the target was most frequently encountered
   double mostVisitedBearingOffset() {
     return (lateralDirection * BIN_WIDTH) * (mostVisitedBin() - MIDDLE_BIN);
   }
 
+  // Method to set the correct segmentation based on the opponent's distance, velocity, and last velocity
   void setSegmentations(double distance, double velocity, double lastVelocity) {
-    int distanceIndex = Math.min(DISTANCE_INDEXES-1, (int)(distance / (MAX_DISTANCE / DISTANCE_INDEXES)));
+    // Compute the indexes based on distance, velocity, and last velocity
+    int distanceIndex = Math.min(DISTANCE_INDEXES - 1, (int)(distance / (MAX_DISTANCE / DISTANCE_INDEXES)));
     int velocityIndex = (int)Math.abs(velocity / 2);
     int lastVelocityIndex = (int)Math.abs(lastVelocity / 2);
+    // Set the buffer to the appropriate statistics segment
     buffer = statBuffers[distanceIndex][velocityIndex][lastVelocityIndex];
   }
 
+  // Method to advance the wave's travel based on its bullet velocity
   private void advance() {
-    distanceTraveled += kin.GFTUtils.bulletVelocity(bulletPower);
+    distanceTraveled += kin.GFTUtils.bulletVelocity(bulletPower);  // Increase the distance based on bullet speed
   }
 
+  // Method to check if the wave has arrived at the target location
   private boolean hasArrived() {
+    // If the bullet has traveled enough to reach the target
     return distanceTraveled > gunLocation.distance(targetLocation) - 18;
   }
 
+  // Method to calculate the "bin" (escape angle range) in which the wave's current bearing falls
   private int currentBin() {
     int bin = (int)Math.round(((Utils.normalRelativeAngle(kin.GFTUtils.absoluteBearing(gunLocation, targetLocation) - bearing)) /
             (lateralDirection * BIN_WIDTH)) + MIDDLE_BIN);
+    // Return the bin index within valid range
     return kin.GFTUtils.minMax(bin, 0, BINS - 1);
   }
 
+  // Method to find the most visited bin (the most likely escape angle based on historical data)
   private int mostVisitedBin() {
-    int mostVisited = MIDDLE_BIN;
+    int mostVisited = MIDDLE_BIN;  // Start with the middle bin
     for (int i = 0; i < BINS; i++) {
+      // Compare the number of visits for each bin and select the most visited one
       if (buffer[i] > buffer[mostVisited]) {
         mostVisited = i;
       }
@@ -211,25 +239,36 @@ class GFTWave extends Condition {
   }
 }
 
+
 class GFTUtils {
+
+  // Method to calculate the bullet velocity based on the power
   static double bulletVelocity(double power) {
+    // Bullet speed decreases with increasing power
     return 20 - 3 * power;
   }
 
+  // Method to project a point a certain distance in a specified direction (angle)
   static Point2D project(Point2D sourceLocation, double angle, double length) {
+    // Use trigonometry to calculate the new position based on angle and distance
     return new Point2D.Double(sourceLocation.getX() + Math.sin(angle) * length,
             sourceLocation.getY() + Math.cos(angle) * length);
   }
 
+  // Method to calculate the absolute bearing (angle) between two points
   static double absoluteBearing(Point2D source, Point2D target) {
+    // Calculate the angle from the source point to the target point using atan2
     return Math.atan2(target.getX() - source.getX(), target.getY() - source.getY());
   }
 
+  // Method to return the sign of a value: -1 for negative, 1 for positive
   static int sign(double v) {
     return v < 0 ? -1 : 1;
   }
 
+  // Method to clamp a value within a specified minimum and maximum range
   static int minMax(int v, int min, int max) {
     return Math.max(min, Math.min(max, v));
   }
 }
+
