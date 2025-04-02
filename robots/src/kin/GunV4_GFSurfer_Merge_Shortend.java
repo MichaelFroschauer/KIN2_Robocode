@@ -30,9 +30,119 @@ public class GunV4_GFSurfer_Merge_Shortend extends AdvancedRobot {
     }
   }
 
+  static int hitCalcTotal = 0;
+  static int hitGuessTotal = 0;
+  static int bulletsFiredTotal = 0;
+  static Map<String, EnemyStats> enemys = new HashMap<String, EnemyStats>();
+  Map<Integer, Boolean> bullets = new HashMap<Integer, Boolean>();
+
+  public void onScannedRobot(ScannedRobotEvent e) {
+
+    // Lock Radar on target
+    //setTurnRadarRight(2.0 * Utils.normalRelativeAngleDegrees(getHeading() + e.getBearing() - getRadarHeading()));
+
+    double enemyAbsoluteBearing = getHeadingRadians() + e.getBearingRadians();
+    double enemyDistance = e.getDistance();
+    double enemyVelocity = e.getVelocity();
+    if (enemyVelocity != 0) {
+      lateralDirection = GFTUtils2.sign(enemyVelocity * Math.sin(e.getHeadingRadians() - enemyAbsoluteBearing));
+    }
+    var bulletPower = getBulletPower(e);
+
+    GFTWave2 wave = new GFTWave2(this);
+    wave.gunLocation = new Point2D.Double(getX(), getY());
+    GFTWave2.targetLocation = GFTUtils2.project(wave.gunLocation, enemyAbsoluteBearing, enemyDistance);
+    wave.lateralDirection = lateralDirection;
+    wave.bulletPower = bulletPower;
+    wave.setSegmentations(enemyDistance, enemyVelocity, lastEnemyVelocity);
+    lastEnemyVelocity = enemyVelocity;
+    wave.bearing = enemyAbsoluteBearing;
+
+    double gunAdjust;
+
+    var enemy = enemys.get(e.getName());
+    if (enemy == null) {
+      enemy = new EnemyStats(e.getName());
+      enemys.put(e.getName(), enemy);
+    }
+
+    boolean aimWithGuess = enemy.shouldFireWithGuess();
+    if (aimWithGuess) {
+      gunAdjust = Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + wave.mostVisitedBearingOffset());
+      setTurnGunRightRadians(gunAdjust);
+      //System.out.println("Bin enemyDistance: " + enemyDistance + " enemyVelocity: " + enemyVelocity + " lastEnemyVelocity: " + lastEnemyVelocity);
+    } else {
+      gunAdjust = getInitialGuess(e);
+      setTurnGunRight(gunAdjust);
+      //System.out.println("Init enemyDistance: " + enemyDistance + " enemyVelocity: " + enemyVelocity + " lastEnemyVelocity: " + lastEnemyVelocity);
+    }
+
+    Bullet bullet;
+    if (getGunHeat() == 0 && gunAdjust < Math.atan2(9, e.getDistance()) && (bullet = setFireBullet(bulletPower)) != null) {
+      bullets.put(bullet.hashCode(), aimWithGuess);
+      bulletsFiredTotal++;
+      enemy.bulletsFired++;
+      if (getEnergy() >= bulletPower) {
+        addCustomEvent(wave);
+      }
+    }
+
+    //System.out.println("Bullets fired: " + bulletsFiredTotal + " hit Calc: " + hitCalcTotal + " hit Guess: " + hitGuessTotal);
+
+    movement.onScannedRobot(e);
+    setTurnRadarRightRadians(Utils.normalRelativeAngle(enemyAbsoluteBearing - getRadarHeadingRadians()) * 2);
+  }
+
+  public void onBulletHit(BulletHitEvent event) {
+    var bulletHitWithGuess = bullets.get(event.getBullet().hashCode());
+    var enemy = enemys.get(event.getName());
+    if (enemy != null) {
+      if (bulletHitWithGuess) {
+        System.out.println(enemy.toString() + " - hit with guess");
+        enemy.hitGuess++;
+        hitGuessTotal++;
+      } else {
+        System.out.println(enemy.toString() + " - hit with calc");
+        enemy.hitCalc++;
+        hitCalcTotal++;
+      }
+    }
+  }
+
+  private double getBulletPower(ScannedRobotEvent e) {
+    double myEnergy = getEnergy();
+    double maxBulletPower = 3.0;  // Maximum value for damage
+    double minBulletPower = 0.1;  // Prevents energy waste
+    double enemyDistance = e.getDistance();
+    double enemyEnergy = e.getEnergy();
+
+    //System.out.println("distance: " + distance + ", myEnergy: " + myEnergy + ", Optimal Firepower: " + lastEnemyEnergy / 4);
+
+    // If hit before, adjust firepower
+    if (enemyEnergy != 0.0 && enemyEnergy < 15) {
+      // https://robowiki.net/wiki/Selecting_Fire_Power
+      double firePower = Math.min(enemyEnergy / 4, maxBulletPower);
+      return Math.max(firePower, minBulletPower);
+    }
+
+    if (myEnergy < 10) {
+      return 0.5;
+    }
+
+    // Dynamic adaptation to distance
+    if (enemyDistance > 400) {
+      return 1.0;
+    } else if (enemyDistance > 200) {
+      return 2.0;
+    }
+
+    return maxBulletPower;
+  }
+
   private double getInitialGuess(ScannedRobotEvent e) {
 
-    var bulletSpeed = Rules.getBulletSpeed(BULLET_POWER);
+    var bulletPower = getBulletPower(e);
+    var bulletSpeed = Rules.getBulletSpeed(bulletPower);
 
     // Target position in relative coordinates
     double absoluteBearing = getHeadingRadians() + e.getBearingRadians();
@@ -78,85 +188,6 @@ public class GunV4_GFSurfer_Merge_Shortend extends AdvancedRobot {
 
     return Utils.normalRelativeAngleDegrees(delta);
   }
-
-  static int hitCalcTotal = 0;
-  static int hitGuessTotal = 0;
-  static int bulletsFiredTotal = 0;
-  Map<Integer, Boolean> bullets = new HashMap<Integer, Boolean>();
-  Map<String, EnemyStats> enemys = new HashMap<String, EnemyStats>();
-
-  public void onScannedRobot(ScannedRobotEvent e) {
-
-    // Lock Radar on target
-    //setTurnRadarRight(2.0 * Utils.normalRelativeAngleDegrees(getHeading() + e.getBearing() - getRadarHeading()));
-
-
-    double enemyAbsoluteBearing = getHeadingRadians() + e.getBearingRadians();
-    double enemyDistance = e.getDistance();
-    double enemyVelocity = e.getVelocity();
-    if (enemyVelocity != 0) {
-      lateralDirection = GFTUtils2.sign(enemyVelocity * Math.sin(e.getHeadingRadians() - enemyAbsoluteBearing));
-    }
-    GFTWave2 wave = new GFTWave2(this);
-    wave.gunLocation = new Point2D.Double(getX(), getY());
-    GFTWave2.targetLocation = GFTUtils2.project(wave.gunLocation, enemyAbsoluteBearing, enemyDistance);
-    wave.lateralDirection = lateralDirection;
-    wave.bulletPower = BULLET_POWER;
-    wave.setSegmentations(enemyDistance, enemyVelocity, lastEnemyVelocity);
-    lastEnemyVelocity = enemyVelocity;
-    wave.bearing = enemyAbsoluteBearing;
-
-    double gunAdjust;
-
-    var enemy = enemys.get(e.getName());
-    if (enemy == null) {
-      enemy = new EnemyStats(e.getName());
-      enemys.put(e.getName(), enemy);
-    }
-
-    boolean aimWithGuess = enemy.shouldFireWithGuess();
-    if (aimWithGuess) {
-      gunAdjust = Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + wave.mostVisitedBearingOffset());
-      setTurnGunRightRadians(gunAdjust);
-      //System.out.println("Bin enemyDistance: " + enemyDistance + " enemyVelocity: " + enemyVelocity + " lastEnemyVelocity: " + lastEnemyVelocity);
-    } else {
-      gunAdjust = getInitialGuess(e);
-      setTurnGunRight(gunAdjust);
-      //System.out.println("Init enemyDistance: " + enemyDistance + " enemyVelocity: " + enemyVelocity + " lastEnemyVelocity: " + lastEnemyVelocity);
-    }
-
-    Bullet bullet;
-    if (getGunHeat() == 0 && gunAdjust < Math.atan2(9, e.getDistance()) && (bullet = setFireBullet(BULLET_POWER)) != null) {
-      bullets.put(bullet.hashCode(), aimWithGuess);
-      bulletsFiredTotal++;
-      enemy.bulletsFired++;
-      if (getEnergy() >= BULLET_POWER) {
-        addCustomEvent(wave);
-      }
-    }
-
-    //System.out.println("Bullets fired: " + bulletsFiredTotal + " hit Calc: " + hitCalcTotal + " hit Guess: " + hitGuessTotal);
-
-    movement.onScannedRobot(e);
-    setTurnRadarRightRadians(Utils.normalRelativeAngle(enemyAbsoluteBearing - getRadarHeadingRadians()) * 2);
-  }
-
-  public void onBulletHit(BulletHitEvent event) {
-    var bulletHitWithGuess = bullets.get(event.getBullet().hashCode());
-    var enemy = enemys.get(event.getName());
-    if (enemy != null) {
-      if (bulletHitWithGuess) {
-        System.out.println(enemy.toString() + " - hit with guess");
-        enemy.hitGuess++;
-        hitGuessTotal++;
-      } else {
-        System.out.println(enemy.toString() + " - hit with calc");
-        enemy.hitCalc++;
-        hitCalcTotal++;
-      }
-    }
-  }
-
 }
 
 
@@ -190,7 +221,7 @@ class EnemyStats {
 
   private double getWeightedRatio() {
     var hitsTotal = hitCalc + hitGuess;
-    return (double) (hitGuess == 0 ? 1 : hitGuess) / hitsTotal;
+    return (double) (hitGuess == 0 ? 1.0 : hitGuess) / hitsTotal;
   }
 
   public String toString() {
@@ -277,7 +308,7 @@ class GFTWave2 extends Condition {
 
   // Method to advance the wave's travel based on its bullet velocity
   private void advance() {
-    distanceTraveled += kin.GFTUtils.bulletVelocity(bulletPower);  // Increase the distance based on bullet speed
+    distanceTraveled += GFTUtils2.bulletVelocity(bulletPower);  // Increase the distance based on bullet speed
   }
 
   // Method to check if the wave has arrived at the target location
@@ -288,10 +319,10 @@ class GFTWave2 extends Condition {
 
   // Method to calculate the "bin" (escape angle range) in which the wave's current bearing falls
   private int currentBin() {
-    int bin = (int)Math.round(((Utils.normalRelativeAngle(kin.GFTUtils.absoluteBearing(gunLocation, targetLocation) - bearing)) /
+    int bin = (int)Math.round(((Utils.normalRelativeAngle(GFTUtils2.absoluteBearing(gunLocation, targetLocation) - bearing)) /
             (lateralDirection * BIN_WIDTH)) + MIDDLE_BIN);
     // Return the bin index within valid range
-    return kin.GFTUtils.minMax(bin, 0, BINS - 1);
+    return GFTUtils2.minMax(bin, 0, BINS - 1);
   }
 
   // Method to find the most visited bin (the most likely escape angle based on historical data)
