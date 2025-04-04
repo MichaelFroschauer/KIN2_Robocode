@@ -23,7 +23,7 @@ cd "${0%/*}" || exit
 # Run Robocode
 java \
   -cp "libs/*" \
-  -Xmx512M \
+  -Xmx4G \
   -Xdock:name=Robocode \
   -Xdock:icon=robocode.ico \
   -XX:+IgnoreUnrecognizedVMOptions \
