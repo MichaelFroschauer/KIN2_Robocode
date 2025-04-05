@@ -34,7 +34,7 @@ import java.util.*;
 public class Evadomatic3000v3 extends AdvancedRobot {
 
     private static final double NINETY_DEG_RAD = Math.PI / 2;
-    private static final double SLIGHTLY_BELOW_NINETY_DEG_RAD = Math.toRadians(72);
+    private static final double SLIGHTLY_BELOW_NINETY_DEG_RAD = Math.toRadians(72); // to gain distance on enemies
 
     private static final int NUM_BINS_ANGLE = 47; // 23 on each side + center
     private static final int CENTER_BIN_ANGLE = (NUM_BINS_ANGLE - 1) / 2;
@@ -42,8 +42,8 @@ public class Evadomatic3000v3 extends AdvancedRobot {
     private static final int NUM_BINS_DISTANCE = 5;
     private static final int DISTANCE_STEPS = 800 / NUM_BINS_DISTANCE;
 
-    private static final int NUM_BINS_FLIGHTTIME = 3;
-    private static final int FLIGHTTIME_STEPS = 80 / NUM_BINS_FLIGHTTIME;
+    private static final int NUM_BINS_FLIGHTTIME = 7;
+    private static final int FLIGHTTIME_STEPS = 100 / NUM_BINS_FLIGHTTIME;
 
     private static final Rectangle2D.Double TARGET_AREA
             = new Rectangle2D.Double(20, 20, 760, 560);
@@ -80,7 +80,7 @@ public class Evadomatic3000v3 extends AdvancedRobot {
         enemy.lastSeen = getTime();
         enemy.heading = event.getHeadingRadians();
 
-        // add heading as getBearing() returns bearing relative to own heading
+        // add heading, as getBearing() returns bearing relative to own heading
         double absoluteBearing = Math.toRadians((getHeading() + event.getBearing()) % 360);
 
         // TODO: no-no - look at single target
@@ -96,8 +96,7 @@ public class Evadomatic3000v3 extends AdvancedRobot {
                 absoluteBearing + Math.PI  // angle enemy shot us with
         ));
 
-
-        // detect shot by bullet drop
+        // detect shot by energy drop
         if (enemy.energyLevels.size() >= 2) { // we need at least two ticks of data
             double lastEnergy = enemy.energyLevels.getFirst().value;
             double energyDelta = lastEnergy - event.getEnergy();
@@ -105,7 +104,7 @@ public class Evadomatic3000v3 extends AdvancedRobot {
             // TODO: account for gaps between scans and other energy fluctuation (idle?)
             if (0.0999 <= energyDelta && // valid energy cost for bullet is in [0.1, 3]
                     energyDelta <= 3.001) {
-                // opponent (probably) show bullet - create new wave
+                // opponent (probably) shot bullet - create new wave
                 double bulletVelocity = calcBulletVelocity(energyDelta);
                 Wave wave = new Wave(
                         enemy,
@@ -158,7 +157,7 @@ public class Evadomatic3000v3 extends AdvancedRobot {
                 double distance = myPos.distance(wave.center) - wave.progress;
                 double ticksUntilHit = distance / wave.velocity;
                 if (ticksUntilHit < closestDistance && distance > wave.velocity) { // TODO: adjust?
-                    closestDistance = distance;
+                    closestDistance = ticksUntilHit;
                     closestWave = wave;
                 }
             }
@@ -189,7 +188,7 @@ public class Evadomatic3000v3 extends AdvancedRobot {
         double distance = wave.center.distance(wave.myPosOnShoot) / (20 - 3 * wave.shotPower);
         int distanceBin = (int) Math.round(distance / FLIGHTTIME_STEPS);
 
-        return clamp(0, distanceBin, NUM_BINS_DISTANCE - 1);
+        return clamp(0, distanceBin, NUM_BINS_FLIGHTTIME - 1);
     }
 
     private Wave getAndRemoveWaveThatHitMe(Bullet bullet) {
@@ -223,7 +222,6 @@ public class Evadomatic3000v3 extends AdvancedRobot {
             int flighttimeBucket = getFlighttimeBinForWave(evilWave);
 
             for (int flighttimeI = 0; flighttimeI < NUM_BINS_FLIGHTTIME; flighttimeI++) {
-
                 for (int distanceI = 0; distanceI < NUM_BINS_DISTANCE; distanceI++) {
                     for (int angleI = 0; angleI < NUM_BINS_ANGLE; angleI++) {
                         // increment buckets around hit with even distribution (1/2, 1/5, ...)
@@ -233,8 +231,12 @@ public class Evadomatic3000v3 extends AdvancedRobot {
                                         + 0.333 / (Math.pow(distanceBucket - distanceI, 2) + 1)
                                         + 0.333 / (Math.pow(flighttimeBucket - distanceI, 2) + 1);
 
+                        oldValue *= 0.95; // decay existing value -> prefer fresher data
+                        if (oldValue < 0.00003) { // 0.95 ^ 200
+                            oldValue = 0;
+                        }
                         enemy.stats[flighttimeI][distanceI][angleI]
-                                = oldValue * 0.95 + newValue; // decay existing value -> prefer fresher data
+                                = oldValue + newValue;
                     }
                 }
             }
@@ -531,8 +533,5 @@ public class Evadomatic3000v3 extends AdvancedRobot {
         if (value > max) return max;
         return value;
     }
-
-    private static double weightedAverage(double value, double newEntry, double factor) {
-        return (value * factor + newEntry * (1.0 - factor));
-    }
 }
+

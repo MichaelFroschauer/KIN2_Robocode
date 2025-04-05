@@ -91,7 +91,7 @@ public class Evadomatic3000v1 extends AdvancedRobot {
 
         out.println(Arrays.toString(enemy.energyLevels.stream().map(e -> e.value).toArray()));
 
-        // detect shot by bullet drop
+        // detect shot by energy drop
         if (enemy.energyLevels.size() >= 2) { // we need at least two ticks of data
             double lastEnergy = enemy.energyLevels.getFirst().value;
             double energyDelta = lastEnergy - event.getEnergy();
