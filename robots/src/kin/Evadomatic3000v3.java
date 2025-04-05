@@ -232,7 +232,7 @@ public class Evadomatic3000v3 extends AdvancedRobot {
                                         + 0.333 / (Math.pow(flighttimeBucket - distanceI, 2) + 1);
 
                         oldValue *= 0.95; // decay existing value -> prefer fresher data
-                        if (oldValue < 0.00003) { // 0.95 ^ 200
+                        if (oldValue < 0.00001) { // (0.95 ^ 200) * 0.33
                             oldValue = 0;
                         }
                         enemy.stats[flighttimeI][distanceI][angleI]
