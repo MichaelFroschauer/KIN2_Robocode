@@ -67,6 +67,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
     private static final Map<String, RobotData> enemies = new HashMap<>();
     private Point2D.Double myPos, myPreviousPos;
     private Map<Integer, Boolean> bullets = new HashMap<>();
+    private Mode mode;
 
     // stop and go
     private int stopAndGoDirection = 1;
@@ -87,8 +88,11 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
     // ------------ main functions ------------
     public void run() {
-        // TODO: reset between rounds?
-        // enemies = new HashMap<>();
+        for (RobotData enemy : enemies.values()) {
+            enemy.reset();
+        }
+
+        mode = getOthers() == 1 ? Mode.ONE_VS_ONE : Mode.MELEE;
 
         movementType = MovementType.TRUE_SURFING;
         stopAndGoEndTime = Long.MAX_VALUE;
@@ -96,11 +100,16 @@ public class NoobSlayer2000 extends AdvancedRobot {
         setAdjustRadarForGunTurn(true);
         setAdjustRadarForRobotTurn(true);
 
-        setTurnRadarRight(Double.POSITIVE_INFINITY);
         while (true) {
             update();
             execute();
         }
+    }
+
+    @Override
+    public void onRobotDeath(RobotDeathEvent event) {
+        mode = getOthers() == 1 ? Mode.ONE_VS_ONE : Mode.MELEE;
+        enemies.get(event.getName()).isDead = true;
     }
 
     @Override
@@ -119,10 +128,6 @@ public class NoobSlayer2000 extends AdvancedRobot {
         // add heading, as getBearing() returns bearing relative to own heading
         double absoluteBearing = Math.toRadians((getHeading() + event.getBearing()) % 360);
 
-        // TODO: no-no - look at single target
-        setTurnRadarRightRadians(Utils.normalRelativeAngle(absoluteBearing
-                - getRadarHeadingRadians()) * 2);
-
         // track surfing data
         double rotationalVelocity = getVelocity() * Math.sin(event.getBearingRadians());
         enemy.surfDirections.addFirst(new RobotData.TimestampedEntry<>(enemy.lastSeen,
@@ -136,11 +141,12 @@ public class NoobSlayer2000 extends AdvancedRobot {
         if (enemy.energyLevels.size() >= 2) { // we need at least two ticks of data
             double lastEnergy = enemy.energyLevels.getFirst().value;
             double energyDelta = lastEnergy - event.getEnergy();
-//            out.println(energyDelta);
             // TODO: account for gaps between scans and other energy fluctuation (idle?)
             if (0.0999 <= energyDelta && // valid energy cost for bullet is in [0.1, 3]
                     energyDelta <= 3.001) {
                 // opponent (probably) shot bullet - create new wave
+                enemy.gunHeat = calcGunHeat(energyDelta);
+
                 double bulletVelocity = calcBulletVelocity(energyDelta);
                 MovementWave wave = new MovementWave(
                         enemy,
@@ -166,6 +172,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
         enemy.pos = offsetPointByAngle(myPos, absoluteBearing, enemy.distance);
 
         onScannedRobotGun(event, enemy, absoluteBearing);
+        onScannedRobotDoRadar(event, enemy, absoluteBearing);
     }
 
     private void onScannedRobotGun(ScannedRobotEvent event, RobotData enemy, double enemyAbsoluteBearing) {
@@ -201,6 +208,44 @@ public class NoobSlayer2000 extends AdvancedRobot {
         }
     }
 
+    private void onScannedRobotDoRadar(ScannedRobotEvent event, RobotData enemy, double absoluteBearing) {
+        switch (mode) {
+            case ONE_VS_ONE -> setTurnRadarRightRadians(Utils.normalRelativeAngle(absoluteBearing
+                    - getRadarHeadingRadians()) * 2);
+            case MELEE -> {
+                // if not every enemy is known (this round): rotate fully
+                if (enemies.values().stream().filter(r -> !r.scannedThisRound && !r.isDead).count() < getOthers()) {
+                    setTurnRadarRightRadians(Double.POSITIVE_INFINITY);
+                    break;
+                }
+
+                // find most outdated enemy
+                Optional<RobotData> oldest = enemies.values().stream()
+                        .filter(r -> !r.isDead)
+                        .min(Comparator.comparingLong(r -> r.lastSeen));
+                if (oldest.isEmpty()) break;
+
+                double targetAngle = calculateBearing(myPos, oldest.get().pos); // TODO: pray
+                double targetAngleDelta = Utils.normalRelativeAngle(targetAngle - getRadarHeadingRadians());
+
+                if (getOthers() > 1) {
+                    // move in direction as fast as possible
+                    setTurnRadarRightRadians(Math.signum(targetAngleDelta) * Double.POSITIVE_INFINITY);
+                    break;
+                }
+
+                // only one opponent remaining: move towards them
+                double anglePadding = Math.toRadians(12.5); // overshoot by 12.5 degrees to make sure we catch 'em
+                setTurnRadarRightRadians(clamp(
+                        -Math.PI / 4,
+                        targetAngleDelta + anglePadding * Math.signum(targetAngleDelta),
+                        Math.PI / 4)
+                );
+                mode = Mode.ONE_VS_ONE;
+            }
+        }
+    }
+
     private void update() {
         // update previously hit list
         previousHitsWhileSurfing.addFirst(false);
@@ -228,7 +273,8 @@ public class NoobSlayer2000 extends AdvancedRobot {
                 // surf! yippie
                 surf();
 
-                if (timesPreviouslyHit >= HIT_THRESHOLD) {
+                if (timesPreviouslyHit >= HIT_THRESHOLD
+                        && mode == Mode.ONE_VS_ONE) {
                     movementType = MovementType.STOP_AND_GO;
                     stopAndGoEndTime = getTime() + STOP_AND_GO_DURATION;
                 }
@@ -248,6 +294,15 @@ public class NoobSlayer2000 extends AdvancedRobot {
             for (GunWave gunWave : enemy.gunWaves) {
                 gunWave.update();
             }
+        }
+
+        // radar stuff
+        for (RobotData enemy : enemies.values()) {
+            enemy.gunHeat -= getGunCoolingRate();
+        }
+        // help, we are not turning! :rage:
+        if (getRadarTurnRemaining() == 0) {
+            setTurnRadarRightRadians(Double.POSITIVE_INFINITY);
         }
     }
 
@@ -525,7 +580,10 @@ public class NoobSlayer2000 extends AdvancedRobot {
         );
 
         g.setColor(Color.WHITE);
-        enemies.values().forEach(robot -> {
+        enemies.values()
+                .stream()
+                .filter(r -> !r.isDead && r.scannedThisRound)
+                .forEach(robot -> {
             // enemy box
             g.drawRect(
                     (int) robot.pos.x - 25,
@@ -567,12 +625,17 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
         // Movement Mode
         g.setColor(Color.WHITE);
-        String text = "Using " + movementType;
-        text += switch (movementType) {
+        String movementText = "Using " + movementType;
+        movementText += switch (movementType) {
             case STOP_AND_GO -> " for %d more ticks".formatted(stopAndGoEndTime - getTime());
             default -> " with only %d hits".formatted(calcTimesPreviouslyHitWhileSurfing());
         };
-        g.drawString(text, 10, 10);
+        g.drawString(movementText, 10, 10);
+
+        // Mode
+        g.setColor(Color.WHITE);
+        String modeText = "Mode: " + mode.toString();
+        g.drawString(modeText, 10, 25);
     }
 
     private static void drawWave(MovementWave wave, Graphics2D g) {
@@ -656,14 +719,37 @@ public class NoobSlayer2000 extends AdvancedRobot {
         private int[][][][] gunStats = new int[GUN_NUM_BINS_DISTANCE][GUN_NUM_BINS_VELOCITY][GUN_NUM_BINS_VELOCITY][GUN_NUM_BINS_ANGLE];
         List<GunWave> gunWaves = new ArrayList<>();
         int bulletsFired;
-        public int hitCalc = 0;
-        public int hitGuess = 0;
+        int hitCalc = 0;
+        int hitGuess = 0;
 
         Point2D.Double pos = new Point2D.Double();
         double distance;
         long lastSeen;
         double heading;
         double velocity, lastVelocity;
+        double gunHeat;
+
+        boolean scannedThisRound;
+        boolean isDead;
+
+        public void reset() {
+            scannedThisRound = false;
+            isDead = false;
+
+            velocity = lastVelocity = 0;
+            lastSeen = 0;
+            distance = 0;
+            gunHeat = 3;
+
+            movementWaves = new ArrayList<>();
+            surfDirections = new LinkedList<>();
+            surfAngles = new LinkedList<>();
+            energyLevels = new LinkedList<>();
+
+            gunWaves = new ArrayList<>();
+
+            pos = new Point2D.Double();
+        }
 
         public boolean shouldFireWithGuess() {
             var hitsTotal = hitCalc + hitGuess;
@@ -730,6 +816,10 @@ public class NoobSlayer2000 extends AdvancedRobot {
     private enum MovementType {
         TRUE_SURFING,
         STOP_AND_GO
+    }
+
+    private enum Mode {
+        ONE_VS_ONE, MELEE
     }
 
     // TODO: consider number of enemies
@@ -857,6 +947,11 @@ public class NoobSlayer2000 extends AdvancedRobot {
         //System.out.println("gunHeading: " + getGunHeading() + ", targetHeading: " + targetHeading + ", delta: " + delta);
 
         return Utils.normalRelativeAngleDegrees(delta);
+    }
+
+    // calculation from wiki
+    private static double calcGunHeat(double bulletPower) {
+        return 1.0 + (bulletPower / 5.0);
     }
 
     // math maths
