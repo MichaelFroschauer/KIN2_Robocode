@@ -1,11 +1,13 @@
 import robocode.*;
 import robocode.util.Utils;
+import sample.Target;
 
 import java.awt.*;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.util.List;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * "True Surfing" based on tutorial on Wiki
@@ -56,7 +58,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
     private static final int GUN_BINS_ANGLE_MIDDLE = (GUN_NUM_BINS_ANGLE - 1) / 2;
     private static final double GUN_MAX_ESCAPE_ANGLE_RAD = 0.2; // TODO: optimize
     private static final double GUN_BIN_WIDTH_ANGLE = GUN_MAX_ESCAPE_ANGLE_RAD / (double) GUN_BINS_ANGLE_MIDDLE;
-
+    private static final double GUN_MIN_SHOOTING_ENERGY = 10;
 
     private static final Rectangle2D.Double TARGET_AREA
             = new Rectangle2D.Double(20, 20, 760, 560);
@@ -66,7 +68,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
     private static final Map<String, RobotData> enemies = new HashMap<>();
     private Point2D.Double myPos, myPreviousPos;
-    private Map<Integer, Boolean> bullets = new HashMap<>();
+    private Map<Integer, TargetingMode> bullets = new HashMap<>();
     private Mode mode;
 
     // stop and go
@@ -109,7 +111,8 @@ public class NoobSlayer2000 extends AdvancedRobot {
     @Override
     public void onRobotDeath(RobotDeathEvent event) {
         mode = getOthers() == 1 ? Mode.ONE_VS_ONE : Mode.MELEE;
-        enemies.get(event.getName()).isDead = true;
+        var enemy = enemies.get(event.getName());
+        enemy.isDead = true;
     }
 
     @Override
@@ -178,22 +181,30 @@ public class NoobSlayer2000 extends AdvancedRobot {
     private void onScannedRobotGun(ScannedRobotEvent event, RobotData enemy, double enemyAbsoluteBearing) {
         int lateralDirection = (int) Math.signum(event.getVelocity() * Math.sin(event.getHeadingRadians() - enemyAbsoluteBearing));
         double bulletPower = getBulletPower(event);
-        double gunAdjust;
+        double gunAdjust = 0.0;
 
-        boolean aimWithGuess = enemy.shouldFireWithGuess();
-        if (aimWithGuess) {
-            gunAdjust = Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + enemy.mostVisitedBearingOffset(lateralDirection));
-            setTurnGunRightRadians(gunAdjust);
-            //out.println("Bin enemyDistance: " + enemyDistance + " enemyVelocity: " + enemyVelocity + " lastEnemyVelocity: " + lastEnemyVelocity);
-        } else {
-            gunAdjust = getCalculatedGunBearingAdjustment(event);
-            setTurnGunRight(gunAdjust);
-            //out.println("Init enemyDistance: " + enemyDistance + " enemyVelocity: " + enemyVelocity + " lastEnemyVelocity: " + lastEnemyVelocity);
+        var targetingMode = enemy.getNextTargetingMode();
+        switch (targetingMode){
+            case TargetingMode.CALC -> {
+                gunAdjust = getCalculatedGunBearingAdjustment(event);
+                setTurnGunRight(gunAdjust);
+            }
+            case TargetingMode.GUESS -> {
+                gunAdjust = Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + enemy.mostVisitedBearingOffset(lateralDirection));
+                setTurnGunRightRadians(gunAdjust);
+            }
+            case TargetingMode.GUESS_REVERSE -> {
+                gunAdjust = Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() - enemy.mostVisitedBearingOffset(lateralDirection));
+                setTurnGunRightRadians(gunAdjust);
+            }
         }
 
         Bullet bullet;
-        if (getGunHeat() == 0 && gunAdjust < Math.atan2(9, event.getDistance()) && (bullet = setFireBullet(bulletPower)) != null) {
-            bullets.put(bullet.hashCode(), aimWithGuess);
+        if (getEnergy() > GUN_MIN_SHOOTING_ENERGY && getGunHeat() == 0
+                && gunAdjust < Math.atan2(9, event.getDistance())
+                && (bullet = setFireBullet(bulletPower)) != null) {
+            out.println("Fired with " + targetingMode.toString() + " - heading: " + getGunHeadingRadians() + " - gun adjust: " + gunAdjust);
+            bullets.put(bullet.hashCode(), targetingMode);
             bulletsFiredTotal++;
             enemy.bulletsFired++;
             if (getEnergy() >= bulletPower) {
@@ -539,16 +550,13 @@ public class NoobSlayer2000 extends AdvancedRobot {
     }
 
     private void onBulletHitGun(BulletHitEvent event, RobotData enemy) {
-        var bulletHitWithGuess = bullets.get(event.getBullet().hashCode());
-        if (bulletHitWithGuess) {
-            out.println(enemy.toString() + " - hit with guess");
-            enemy.hitGuess++;
-            hitGuessTotal++;
-        } else {
-            out.println(enemy.toString() + " - hit with calc");
-            enemy.hitCalc++;
-            hitCalcTotal++;
-        }
+        var targetingMode = bullets.get(event.getBullet().hashCode());
+        var v = enemy.stats.getOrDefault(targetingMode, 0);
+
+        enemy.stats.put(targetingMode, ++v);
+        enemy.hitsTotal++;
+
+        out.println(enemy + " - hit with " + targetingMode.toString());
     }
 
     @Override
@@ -656,7 +664,8 @@ public class NoobSlayer2000 extends AdvancedRobot {
         int direction /* we were moving when enemy fired */;
         double shotPower;
 
-        public MovementWave(RobotData robotData, Point2D.Double center, Point2D.Double myPosOnShoot, long startTicks, double velocity, double angle, int direction, double progress, double shotPower) {
+        public MovementWave(RobotData robotData, Point2D.Double center, Point2D.Double myPosOnShoot, long startTicks,
+                            double velocity, double angle, int direction, double progress, double shotPower) {
             this.robotData = robotData;
             this.center = center;
             this.myPosOnShoot = myPosOnShoot;
@@ -718,9 +727,13 @@ public class NoobSlayer2000 extends AdvancedRobot {
         // gun stuff
         private int[][][][] gunStats = new int[GUN_NUM_BINS_DISTANCE][GUN_NUM_BINS_VELOCITY][GUN_NUM_BINS_VELOCITY][GUN_NUM_BINS_ANGLE];
         List<GunWave> gunWaves = new ArrayList<>();
+        HashMap<TargetingMode, Integer> stats = Arrays.stream(ALLOWED_TARGETING_MODES).collect(
+                HashMap::new,
+                (m, v) -> m.put(v, 0),
+                HashMap::putAll
+        );
         int bulletsFired;
-        int hitCalc = 0;
-        int hitGuess = 0;
+        int hitsTotal = 0;
 
         Point2D.Double pos = new Point2D.Double();
         double distance;
@@ -751,26 +764,26 @@ public class NoobSlayer2000 extends AdvancedRobot {
             pos = new Point2D.Double();
         }
 
-        public boolean shouldFireWithGuess() {
-            var hitsTotal = hitCalc + hitGuess;
-
+        public TargetingMode getNextTargetingMode() {
             if (hitsTotal <= 5) {
-                return RANDOM.nextBoolean();
+                var values = ALLOWED_TARGETING_MODES;
+                return values[RANDOM.nextInt(values.length)];
             }
 
-            double ratio = getWeightedRatio();
-            boolean fireWithGuess = RANDOM.nextDouble() <= ratio;
-            //    if (fireWithGuess) {
-            //      System.out.println("Ratio: " + String.format( "%.2f", ratio ) + " Fire with guess at " + name);
-            //    } else {
-            //      System.out.println("Ratio: " + String.format( "%.2f", ratio ) + " Fire with calc at " + name);
-            //    }
-            return fireWithGuess;
-        }
+            var weights = new HashMap<TargetingMode, Integer>();
+            stats.forEach( (k, v) -> weights.put(k, 1 + v));
 
-        private double getWeightedRatio() {
-            var hitsTotal = hitCalc + hitGuess;
-            return (hitGuess == 0 ? 1.0 : hitGuess) / hitsTotal;
+            var totalWeight = weights.values().stream().mapToInt(Integer::intValue).sum();
+            var randomValue = RANDOM.nextInt(totalWeight);
+
+            for (var entry : weights.entrySet()) {
+                randomValue -= entry.getValue();
+                if (randomValue < 0) {
+                    return entry.getKey();
+                }
+            }
+
+            return TargetingMode.GUESS;
         }
 
         // Method to calculate the bearing offset where the target was most frequently encountered
@@ -812,6 +825,16 @@ public class NoobSlayer2000 extends AdvancedRobot {
             }
         }
     }
+
+    enum TargetingMode {
+        CALC, GUESS, GUESS_REVERSE
+    }
+
+    static TargetingMode[] ALLOWED_TARGETING_MODES = {
+            TargetingMode.CALC,
+            TargetingMode.GUESS,
+//            TargetingMode.GUESS_REVERSE
+    };
 
     private enum MovementType {
         TRUE_SURFING,
