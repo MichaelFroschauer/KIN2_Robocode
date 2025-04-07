@@ -1,13 +1,11 @@
 import robocode.*;
 import robocode.util.Utils;
-import sample.Target;
 
 import java.awt.*;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.util.List;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * "True Surfing" based on tutorial on Wiki
@@ -54,11 +52,13 @@ public class NoobSlayer2000 extends AdvancedRobot {
     private static final int GUN_MAX_BULLET_DISTANCE = 900; // TODO: dynamic(tm)
     private static final int GUN_NUM_BINS_DISTANCE = 5;
     private static final int GUN_NUM_BINS_VELOCITY = 5;
-    private static final int GUN_NUM_BINS_ANGLE = 25;
+    private static final int GUN_NUM_BINS_ANGLE = 45;
     private static final int GUN_BINS_ANGLE_MIDDLE = (GUN_NUM_BINS_ANGLE - 1) / 2;
-    private static final double GUN_MAX_ESCAPE_ANGLE_RAD = 0.2; // TODO: optimize
+    private static final double GUN_MAX_ESCAPE_ANGLE_RAD = 0.6; // TODO: optimize
     private static final double GUN_BIN_WIDTH_ANGLE = GUN_MAX_ESCAPE_ANGLE_RAD / (double) GUN_BINS_ANGLE_MIDDLE;
-    private static final double GUN_MIN_SHOOTING_ENERGY = 10;
+    private static final double GUN_MIN_SHOOTING_ENERGY = 5;
+    private static final double GUN_TURN_TOLERANCE_STEP = 0.1;
+    private static final double GUN_TURN_TOLERANCE_MAX = 3;
 
     private static final Rectangle2D.Double TARGET_AREA
             = new Rectangle2D.Double(20, 20, 760, 560);
@@ -70,6 +70,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
     private Point2D.Double myPos, myPreviousPos;
     private Map<Integer, TargetingMode> bullets = new HashMap<>();
     private Mode mode;
+    private double gunTurnTolerance = 0.1;
 
     // stop and go
     private int stopAndGoDirection = 1;
@@ -181,41 +182,44 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
     private void onScannedRobotGun(ScannedRobotEvent event, RobotData enemy, double enemyAbsoluteBearing) {
         int lateralDirection = (int) Math.signum(event.getVelocity() * Math.sin(event.getHeadingRadians() - enemyAbsoluteBearing));
-        double bulletPower = getBulletPower(event);
+        double bulletPower = getBulletPower(event, enemy);
         double gunAdjust = 0.0;
 
         var targetingMode = enemy.getNextTargetingMode();
-        switch (targetingMode){
+        switch (targetingMode) {
             case TargetingMode.CALC -> {
                 gunAdjust = getCalculatedGunBearingAdjustment(event);
-                setTurnGunRight(gunAdjust);
+                setTurnGunRightRadians(gunAdjust);
             }
             case TargetingMode.GUESS -> {
                 gunAdjust = Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + enemy.mostVisitedBearingOffset(lateralDirection));
                 setTurnGunRightRadians(gunAdjust);
             }
-            case TargetingMode.GUESS_REVERSE -> {
-                gunAdjust = Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() - enemy.mostVisitedBearingOffset(lateralDirection));
-                setTurnGunRightRadians(gunAdjust);
-            }
+//            case TargetingMode.GUESS_REVERSE -> {
+//                gunAdjust = Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() - enemy.mostVisitedBearingOffset(lateralDirection));
+//                setTurnGunRightRadians(gunAdjust);
+//            }
         }
+        //out.println("GunTurnTolerance: " + gunTurnTolerance);
+        if (getEnergy() > GUN_MIN_SHOOTING_ENERGY && getGunHeat() == 0) {
+            if (Math.abs(getGunTurnRemaining()) < gunTurnTolerance) {
+                Bullet bullet = setFireBullet(bulletPower);
+                if (bullet != null) {
+                    bullets.put(bullet.hashCode(), targetingMode);
+                    bulletsFiredTotal++;
+                    enemy.bulletsFired++;
+                    enemy.gunWaves.add(new GunWave(
+                            enemy,
+                            (Point2D.Double) myPos.clone(),
+                            calcBulletVelocity(bulletPower),
+                            enemyAbsoluteBearing,
+                            lateralDirection
+                    ));
 
-        Bullet bullet;
-        if (getEnergy() > GUN_MIN_SHOOTING_ENERGY && getGunHeat() == 0
-                && gunAdjust < Math.atan2(9, event.getDistance())
-                && (bullet = setFireBullet(bulletPower)) != null) {
-            out.println("Fired with " + targetingMode.toString() + " - heading: " + getGunHeadingRadians() + " - gun adjust: " + gunAdjust);
-            bullets.put(bullet.hashCode(), targetingMode);
-            bulletsFiredTotal++;
-            enemy.bulletsFired++;
-            if (getEnergy() >= bulletPower) {
-                enemy.gunWaves.add(new GunWave(
-                        enemy,
-                        (Point2D.Double) myPos.clone(),
-                        calcBulletVelocity(bulletPower),
-                        enemyAbsoluteBearing,
-                        lateralDirection
-                ));
+                    gunTurnTolerance = Math.max(GUN_TURN_TOLERANCE_STEP, gunTurnTolerance - GUN_TURN_TOLERANCE_STEP);
+                }
+            } else {
+                gunTurnTolerance = Math.min(GUN_TURN_TOLERANCE_MAX, gunTurnTolerance + GUN_TURN_TOLERANCE_STEP);
             }
         }
     }
@@ -426,9 +430,9 @@ public class NoobSlayer2000 extends AdvancedRobot {
     }
 
     // for wave and direction (left/right),
-    // simulate movement 90 degrees towards the center of the wave,
-    // account for game physics and wall smoothing,
-    // calculate precise position for interception with that wave
+// simulate movement 90 degrees towards the center of the wave,
+// account for game physics and wall smoothing,
+// calculate precise position for interception with that wave
     private Point2D.Double predictInterception(MovementWave wave, int direction) {
         Point2D.Double result = new Point2D.Double(getX(), getY());
         double resultVelocity = getVelocity();
@@ -494,8 +498,8 @@ public class NoobSlayer2000 extends AdvancedRobot {
     }
 
     // surf by moving either left or right in relation to the center of the wave
-    //   - direction depends on which is less risky according to previous hits on the angle
-    //     the predicted position in the chosen direction would imply
+//   - direction depends on which is less risky according to previous hits on the angle
+//     the predicted position in the chosen direction would imply
     private void surf() {
         MovementWave waveToSurf = getMostDangerousWave();
         if (waveToSurf == null) return;
@@ -552,9 +556,9 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
     private void onBulletHitGun(BulletHitEvent event, RobotData enemy) {
         var targetingMode = bullets.get(event.getBullet().hashCode());
-        var v = enemy.stats.getOrDefault(targetingMode, 0);
+        var v = enemy.hitStats.getOrDefault(targetingMode, 0);
 
-        enemy.stats.put(targetingMode, ++v);
+        enemy.hitStats.put(targetingMode, ++v);
         enemy.hitsTotal++;
 
         out.println(enemy + " - hit with " + targetingMode.toString());
@@ -573,64 +577,74 @@ public class NoobSlayer2000 extends AdvancedRobot {
     @Override
     public void onPaint(Graphics2D g) {
         // draw own headings
-        g.setColor(Color.green);
-        g.drawLine(
-                (int) getX(),
-                (int) getY(),
-                (int) (getX() + Math.sin(getHeading()) * 100),
-                (int) (getX() + Math.cos(getHeading()) * 100)
-        );
-        g.setColor(Color.red);
-        g.drawLine(
-                (int) getX(),
-                (int) getY(),
-                (int) (getX() + Math.sin(getGunHeading()) * 100),
-                (int) (getX() + Math.cos(getGunHeading()) * 100)
-        );
+//        g.setColor(Color.green);
+//        g.drawLine(
+//                (int) getX(),
+//                (int) getY(),
+//                (int) (getX() + Math.sin(getHeading()) * 100),
+//                (int) (getX() + Math.cos(getHeading()) * 100)
+//        );
+//        g.setColor(Color.red);
+//        g.drawLine(
+//                (int) getX(),
+//                (int) getY(),
+//                (int) (getX() + Math.sin(getGunHeading()) * 100),
+//                (int) (getX() + Math.cos(getGunHeading()) * 100)
+//        );
 
         g.setColor(Color.WHITE);
         enemies.values()
                 .stream()
                 .filter(r -> !r.isDead && r.scannedThisRound)
                 .forEach(robot -> {
-            // enemy box
-            g.drawRect(
-                    (int) robot.pos.x - 25,
-                    (int) robot.pos.y - 25,
-                    50, 50
-            );
-            // enemy angle
-            g.drawLine(
-                    (int) robot.pos.x,
-                    (int) robot.pos.y,
-                    (int) (robot.pos.x + (Math.sin(robot.heading) * 50)),
-                    (int) (robot.pos.y + (Math.cos(robot.heading) * 50))
-            );
+                    robot.printStats();
+                    // enemy box
+                    g.drawRect(
+                            (int) robot.pos.x - 25,
+                            (int) robot.pos.y - 25,
+                            50, 50
+                    );
+                    // enemy angle
+                    g.drawLine(
+                            (int) robot.pos.x,
+                            (int) robot.pos.y,
+                            (int) (robot.pos.x + (Math.sin(robot.heading) * 50)),
+                            (int) (robot.pos.y + (Math.cos(robot.heading) * 50))
+                    );
 
-            // waves
-            for (MovementWave wave : robot.movementWaves) {
-                // draw wave
-                g.drawOval(
-                        (int) (wave.center.x - wave.progress),
-                        (int) (wave.center.y - wave.progress),
-                        (int) (wave.progress * 2),
-                        (int) (wave.progress * 2)
-                );
-            }
-        });
+                    // waves
+//            for (MovementWave wave : robot.movementWaves) {
+//                // draw wave
+//                g.drawOval(
+//                        (int) (wave.center.x - wave.progress),
+//                        (int) (wave.center.y - wave.progress),
+//                        (int) (wave.progress * 2),
+//                        (int) (wave.progress * 2)
+//                );
+//            }
+                });
+
+        enemies.values()
+                .stream()
+                .filter(r -> !r.isDead)
+                .forEach(robot -> {
+                    for (GunWave wave : robot.gunWaves) {
+                        wave.print(g);
+                    }
+                });
 
         // most dangerous wave
-        MovementWave mostDangerousWave = getMostDangerousWave();
-        if (mostDangerousWave != null) {
-            g.setColor(Color.pink);
-            drawWave(mostDangerousWave, g);
-        }
+//        MovementWave mostDangerousWave = getMostDangerousWave();
+//        if (mostDangerousWave != null) {
+//            g.setColor(Color.pink);
+//            drawWave(mostDangerousWave, g);
+//        }
 
         // evil wave (which just hit us :rage:)
-        if (evilWaveJustHitUsReeee != null) {
-            g.setColor(Color.GREEN);
-            drawWave(evilWaveJustHitUsReeee, g);
-        }
+//        if (evilWaveJustHitUsReeee != null) {
+//            g.setColor(Color.GREEN);
+//            drawWave(evilWaveJustHitUsReeee, g);
+//        }
 
         // Movement Mode
         g.setColor(Color.WHITE);
@@ -686,6 +700,9 @@ public class NoobSlayer2000 extends AdvancedRobot {
         double progress;
         double bearingOffset /* to direct angle to enemy when we shot */;
         int lateralDirection /* of enemy towards us when we shot */;
+        int distanceIndex;
+        int velocityIndex;
+        int lastVelocityIndex;
 
         public GunWave(RobotData robotData, Point2D.Double center, double velocity, double bearingOffset, int lateralDirection) {
             this.robotData = robotData;
@@ -693,27 +710,91 @@ public class NoobSlayer2000 extends AdvancedRobot {
             this.velocity = velocity;
             this.bearingOffset = bearingOffset;
             this.lateralDirection = lateralDirection;
+            this.distanceIndex = robotData.getDistanceIndex();
+            this.velocityIndex = robotData.getVelocityIndex();
+            this.lastVelocityIndex = robotData.getLastVelocityIndex();
         }
 
         public void update() {
             progress += velocity; // TODO: research if first tick after shot already moves bullet
 
-            double distance = center.distance(robotData.pos);
-            if (progress > distance - 18) {
-                int distanceIndex = robotData.getDistanceIndex();
-                int velocityIndex = robotData.getVelocityIndex();
-                int lastVelocityIndex = robotData.getLastVelocityIndex();
-                int angleIndex = calcAngleIndex();
+//            double distance = center.distance(robotData.pos);
+//            if (progress > distance - 18) {
+//                int distanceIndex = robotData.getDistanceIndex();
+//                int velocityIndex = robotData.getVelocityIndex();
+//                int lastVelocityIndex = robotData.getLastVelocityIndex();
+//                int angleIndex = calcAngleIndex();
+//
+//                System.out.println("angleIndex: " + angleIndex);
+//                if (angleIndex < 0 || angleIndex >= GUN_NUM_BINS_ANGLE)
+//                    return;
 
+            var angleIndex = -1;
+            var currentMinDistance = Double.MAX_VALUE;
+            for (int i = 0; i < GUN_NUM_BINS_ANGLE; i++) {
+                double angle = bearingOffset + lateralDirection * (i - GUN_BINS_ANGLE_MIDDLE) * GUN_BIN_WIDTH_ANGLE;
+                double radius = progress;
+                Point2D.Double binPoint = offsetPointByAngle(center, angle, radius);
+
+                var binEnemyDistance = robotData.pos.distance(binPoint);
+                if (binEnemyDistance < 18 && binEnemyDistance < currentMinDistance) {
+                    currentMinDistance = binEnemyDistance;
+                    angleIndex = i;
+                }
+            }
+
+            //double angle = bearingOffset + lateralDirection * GUN_BINS_ANGLE_MIDDLE * GUN_BIN_WIDTH_ANGLE;
+
+            if (angleIndex >= 0) {
+                //System.out.println("angleIndex: " + angleIndex);
                 robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex][angleIndex]++; // TODO: bin smoothing
+//                    int[] smoothing = {1, 3, 6, 3, 1}; // relative weights
+//                    int centerOffset = 2; // position of the central value (corresponds to +6)
+//                    for (int i = -2; i <= 2; i++) {
+//                        int targetAngleIndex = angleIndex + i;
+//                        if (targetAngleIndex >= 0 && targetAngleIndex < robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex].length) {
+//                            robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex][targetAngleIndex] += smoothing[i + centerOffset];
+//                        }
+//                    }
+            }
+//            }
+        }
+
+        public void print(Graphics2D g) {
+
+            int[] angleStats = robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex];
+
+            // Find max count for normalization
+            int maxCount = 0;
+            for (int count : angleStats) {
+                if (count > maxCount) maxCount = count;
+            }
+            for (int i = 0; i < angleStats.length; i++) {
+                double angle = bearingOffset + lateralDirection * (i - GUN_BINS_ANGLE_MIDDLE) * GUN_BIN_WIDTH_ANGLE;
+                Point2D.Double binPoint = offsetPointByAngle(center, angle, progress);
+
+                // Normalize intensity [0, 1]
+                double intensity = 0;
+                if (maxCount > 0) {
+                    intensity = (double) angleStats[i] / maxCount;
+                }
+
+                // Convert intensity to color (heatmap style)
+                Color color = getHeatmapColor(intensity);
+                g.setColor(color);
+                g.fillOval((int) binPoint.x - 3, (int) binPoint.y - 3, 6, 6);
+
             }
         }
 
-        private int calcAngleIndex() {
-            int bin = (int) Math.round(((Utils.normalRelativeAngle(calculateBearing(center, robotData.pos) - bearingOffset)) /
-                    (lateralDirection * GUN_BIN_WIDTH_ANGLE)) + GUN_BINS_ANGLE_MIDDLE);
-            // Return the bin index within valid range
-            return clamp(0, bin, GUN_NUM_BINS_ANGLE - 1);
+        private static Color getHeatmapColor(double value) {
+            value = Math.max(0.0, Math.min(1.0, value)); // Clamp between 0 and 1
+
+            float hue = (float) (0.66 - (0.66 * value)); // 0.66 (blue) to 0.0 (red)
+            float saturation = 1.0f;
+            float brightness = 1.0f;
+
+            return Color.getHSBColor(hue, saturation, brightness);
         }
     }
 
@@ -728,7 +809,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
         // gun stuff
         private int[][][][] gunStats = new int[GUN_NUM_BINS_DISTANCE][GUN_NUM_BINS_VELOCITY][GUN_NUM_BINS_VELOCITY][GUN_NUM_BINS_ANGLE];
         List<GunWave> gunWaves = new ArrayList<>();
-        HashMap<TargetingMode, Integer> stats = Arrays.stream(ALLOWED_TARGETING_MODES).collect(
+        HashMap<TargetingMode, Integer> hitStats = Arrays.stream(TargetingMode.values()).collect(
                 HashMap::new,
                 (m, v) -> m.put(v, 0),
                 HashMap::putAll
@@ -765,14 +846,45 @@ public class NoobSlayer2000 extends AdvancedRobot {
             pos = new Point2D.Double();
         }
 
+        private void printStats() {
+//            var filledBins = 0;
+//            var maxStat = 0;
+//            for (int a = 0; a < GUN_NUM_BINS_DISTANCE; a++) {
+//                for (int b = 0; b < GUN_NUM_BINS_VELOCITY; b++) {
+//                    for (int c = 0; c < GUN_NUM_BINS_VELOCITY; c++) {
+//                        for (int d = 0; d < GUN_NUM_BINS_ANGLE; d++) {
+//                            var val = gunStats[a][b][c][d];
+//                            if (val > 0) {
+//                                filledBins++;
+//                            }
+//                            if(val > maxStat) {
+//                                maxStat = val;
+//                            }
+//                        }
+//                    }
+//                }
+//            }
+//            System.out.println("Filled bins: " + filledBins + " max value: " + maxStat);
+        }
+
         public TargetingMode getNextTargetingMode() {
             if (hitsTotal <= 5) {
-                var values = ALLOWED_TARGETING_MODES;
+                var values = TargetingMode.values();
                 return values[RANDOM.nextInt(values.length)];
             }
 
-            var weights = new HashMap<TargetingMode, Integer>();
-            stats.forEach( (k, v) -> weights.put(k, 1 + v));
+            var modeStats = new int[TargetingMode.values().length];
+            hitStats.forEach((k, v) -> modeStats[k.ordinal()] = v);
+
+            return TargetingMode.values()[rouletteWheel(modeStats)];
+        }
+
+        private int rouletteWheel(int[] stats) {
+            var weights = new HashMap<Integer, Integer>();
+
+            for (var i = 0; i < stats.length; i++) {
+                weights.put(i, 1 + stats[i]);
+            }
 
             var totalWeight = weights.values().stream().mapToInt(Integer::intValue).sum();
             var randomValue = RANDOM.nextInt(totalWeight);
@@ -784,7 +896,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
                 }
             }
 
-            return TargetingMode.GUESS;
+            return 0; // can't happen
         }
 
         // Method to calculate the bearing offset where the target was most frequently encountered
@@ -816,6 +928,11 @@ public class NoobSlayer2000 extends AdvancedRobot {
             return mostVisited;
         }
 
+        int mostVisitedBin2() {
+            int[] angleStats = gunStats[getDistanceIndex()][getVelocityIndex()][getLastVelocityIndex()];
+            return rouletteWheel(angleStats);
+        }
+
         static class TimestampedEntry<T> {
             T value;
             long timestamp;
@@ -828,14 +945,11 @@ public class NoobSlayer2000 extends AdvancedRobot {
     }
 
     enum TargetingMode {
-        CALC, GUESS, GUESS_REVERSE
+        CALC,
+        GUESS,
+        //GUESS_REVERSE
     }
 
-    static TargetingMode[] ALLOWED_TARGETING_MODES = {
-            TargetingMode.CALC,
-            TargetingMode.GUESS,
-//            TargetingMode.GUESS_REVERSE
-    };
 
     private enum MovementType {
         TRUE_SURFING,
@@ -852,9 +966,9 @@ public class NoobSlayer2000 extends AdvancedRobot {
     }
 
     // from wiki
-    // move towards an angle efficiently
-    // for example, instead of turning left by 120 degrees and moving forwards,
-    // turn right 60 degrees and move backwards
+// move towards an angle efficiently
+// for example, instead of turning left by 120 degrees and moving forwards,
+// turn right 60 degrees and move backwards
     private void moveAtAbsoluteAngle(double goalAngle, double distance) {
         double angleDelta = Utils.normalRelativeAngle(goalAngle - getHeadingRadians());
         double absAngleDelta = Math.abs(angleDelta);
@@ -881,13 +995,13 @@ public class NoobSlayer2000 extends AdvancedRobot {
     }
 
     // calculation from wiki
-    // returns maximum angle (delta to direct lock) that could hit enemy, depending on bullet velocity
+// returns maximum angle (delta to direct lock) that could hit enemy, depending on bullet velocity
     private static double maxEscapeAngle(double velocity) {
         return Math.asin(8.0 / velocity);
     }
 
     // calculation from wiki adjusts angle to prevent bot from running into wall by iteratively checking and reducing said angle
-    // also considers enemies
+// also considers enemies
     public double wallAndEnemySmoothing(Point2D.Double botLocation, double angle, int orientation) {
         final double collisionRadius = 80; // robot is 36x36 according to wiki
         int iterations = 0;
@@ -919,7 +1033,12 @@ public class NoobSlayer2000 extends AdvancedRobot {
         return Utils.normalAbsoluteAngle(angle);
     }
 
-    private double getBulletPower(ScannedRobotEvent e) {
+    private double getBulletPower2(ScannedRobotEvent e, RobotData enemy) {
+        return 2 - Math.max(0, (30 - getEnergy()) / 16);
+    }
+
+    private double getBulletPower3(ScannedRobotEvent e, RobotData enemy) {
+
         double myEnergy = getEnergy();
         double maxBulletPower = 3.0;  // Maximum value for damage
         double minBulletPower = 0.1;  // Prevents energy waste
@@ -949,8 +1068,29 @@ public class NoobSlayer2000 extends AdvancedRobot {
         return maxBulletPower;
     }
 
+
+    private double getBulletPower(ScannedRobotEvent e, RobotData enemy) {
+        double bulletPower = 2.95;
+        var maxEnemyEnergy = enemy.energyLevels.stream().max(Comparator.comparingDouble(x -> x.timestamp)).get().value;
+        bulletPower = Math.min(bulletPower, (maxEnemyEnergy + 0.01) / 4);
+
+        var minDist = e.getDistance();
+        var botEnergy = getEnergy();
+
+        if (minDist > 150 && getOthers() == 1)
+            bulletPower = Math.min(bulletPower, 1.95);
+
+        if (minDist > 150)
+            bulletPower = Math.min(bulletPower, botEnergy / 20);
+        else
+            bulletPower = Math.min(bulletPower, botEnergy - 0.1);
+
+        return Math.min(bulletPower, 1300 / minDist);
+    }
+
     private double getCalculatedGunBearingAdjustment(ScannedRobotEvent e) {
-        var bulletPower = getBulletPower(e);
+        var enemy = enemies.get(e.getName());
+        var bulletPower = getBulletPower(e, enemy);
         var bulletSpeed = Rules.getBulletSpeed(bulletPower);
 
         // Target position in relative coordinates
@@ -995,7 +1135,11 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
         //System.out.println("gunHeading: " + getGunHeading() + ", targetHeading: " + targetHeading + ", delta: " + delta);
 
-        return Utils.normalRelativeAngleDegrees(delta);
+        return degreesToRadians(Utils.normalRelativeAngleDegrees(delta));
+    }
+
+    private double degreesToRadians(double angleInDegrees) {
+        return angleInDegrees * Math.PI / 180;
     }
 
     // calculation from wiki
