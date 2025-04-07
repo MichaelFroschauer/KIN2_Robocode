@@ -124,6 +124,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
         enemy.heading = event.getHeadingRadians();
         enemy.lastVelocity = enemy.velocity;
         enemy.velocity = event.getVelocity();
+        enemy.scannedThisRound = true;
 
         // add heading, as getBearing() returns bearing relative to own heading
         double absoluteBearing = Math.toRadians((getHeading() + event.getBearing()) % 360);
@@ -134,11 +135,11 @@ public class NoobSlayer2000 extends AdvancedRobot {
                 rotationalVelocity >= 0 ? 1 : -1  // direction we are currently moving in, relative to enemy
         ));
         enemy.surfAngles.addFirst(new RobotData.TimestampedEntry<>(enemy.lastSeen,
-                absoluteBearing + Math.PI  // angle enemy shot us with
+                absoluteBearing + Math.PI
         ));
 
         // detect shot by energy drop
-        if (enemy.energyLevels.size() >= 2) { // we need at least two ticks of data
+        if (enemy.energyLevels.size() > 2) { // we need at least two ticks of data
             double lastEnergy = enemy.energyLevels.getFirst().value;
             double energyDelta = lastEnergy - event.getEnergy();
             // TODO: account for gaps between scans and other energy fluctuation (idle?)
@@ -214,7 +215,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
                     - getRadarHeadingRadians()) * 2);
             case MELEE -> {
                 // if not every enemy is known (this round): rotate fully
-                if (enemies.values().stream().filter(r -> !r.scannedThisRound && !r.isDead).count() < getOthers()) {
+                if (enemies.values().stream().filter(r -> r.scannedThisRound && !r.isDead).count() < getOthers()) {
                     setTurnRadarRightRadians(Double.POSITIVE_INFINITY);
                     break;
                 }
@@ -429,7 +430,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
             double ninetyDegAngle = calculateBearing(wave.center, result) + (direction * SLIGHTLY_BELOW_NINETY_DEG_RAD);
 
             // adjust angle to not run into walls
-            double moveAngle = wallSmoothing(result, ninetyDegAngle, direction) - resultHeading;
+            double moveAngle = wallAndEnemySmoothing(result, ninetyDegAngle, direction) - resultHeading;
 
             // adjust direction (clockwise/counterclockwise)
             double moveDir = 1;
@@ -495,7 +496,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
         // calculate left or right move angle, depending on which is lower risk
         double waveAngle = calculateBearing(waveToSurf.center, myPos);
         int betterDirection = risk1 < risk2 ? -1 : 1;
-        double moveAngle = wallSmoothing(
+        double moveAngle = wallAndEnemySmoothing(
                 myPos,
                 waveAngle + SLIGHTLY_BELOW_NINETY_DEG_RAD * betterDirection,
                 betterDirection
@@ -512,7 +513,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
         double distance = RANDOM.nextDouble(70, 120);
         double waveAngle = calculateBearing(waveToFool.center, myPos);
-        double moveAngle = wallSmoothing(
+        double moveAngle = wallAndEnemySmoothing(
                 myPos,
                 waveAngle + SLIGHTLY_BELOW_NINETY_DEG_RAD * stopAndGoDirection,
                 stopAndGoDirection
@@ -628,7 +629,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
         String movementText = "Using " + movementType;
         movementText += switch (movementType) {
             case STOP_AND_GO -> " for %d more ticks".formatted(stopAndGoEndTime - getTime());
-            default -> " with only %d hits".formatted(calcTimesPreviouslyHitWhileSurfing());
+            default -> " with %d hits".formatted(calcTimesPreviouslyHitWhileSurfing());
         };
         g.drawString(movementText, 10, 10);
 
@@ -863,11 +864,36 @@ public class NoobSlayer2000 extends AdvancedRobot {
     }
 
     // calculation from wiki adjusts angle to prevent bot from running into wall by iteratively checking and reducing said angle
-    public double wallSmoothing(Point2D.Double botLocation, double angle, int orientation) {
-        while (!TARGET_AREA.contains(offsetPointByAngle(botLocation, angle, TARGET_AREA_PADDING))) {
-            angle += orientation * 0.05; // slightly adjust angle
+    // also considers enemies
+    public double wallAndEnemySmoothing(Point2D.Double botLocation, double angle, int orientation) {
+        final double collisionRadius = 80; // robot is 36x36 according to wiki
+        int iterations = 0;
+
+        while (++iterations < 100) {
+            Point2D.Double wallDest = offsetPointByAngle(botLocation, angle, TARGET_AREA_PADDING);
+            Point2D.Double enemyDest = offsetPointByAngle(botLocation, angle, 20);
+
+            boolean targetAreaCheck = TARGET_AREA.contains(wallDest);
+            boolean enemyBotCheck = true;
+            for (RobotData enemy : enemies.values()) {
+                if (enemy.isDead || !enemy.scannedThisRound) continue;
+
+                Point2D.Double pos = enemy.pos;
+                double left = pos.x - collisionRadius;
+                double right = pos.x + collisionRadius;
+                double top = pos.y - collisionRadius;
+                double bottom = pos.y + collisionRadius;
+                if (enemyDest.x > left && enemyDest.x < right
+                        && enemyDest.y > top && enemyDest.y < bottom) {
+                    enemyBotCheck = false;
+                    break;
+                }
+            }
+
+            if (targetAreaCheck && enemyBotCheck) break;
+            angle += orientation * (enemyBotCheck ? 0.05 : 0.5);
         }
-        return angle;
+        return Utils.normalAbsoluteAngle(angle);
     }
 
     private double getBulletPower(ScannedRobotEvent e) {
