@@ -908,9 +908,9 @@ public class NoobSlayer2000 extends AdvancedRobot {
         }
 
         private HashMap<TargetingMode, Integer> getHitStatsByHeuristic(double energy) {
-//            if(energy > 80) return this.hitStats.get(2);
-//            if (energy > 15) return this.hitStats.get(1);
-            return this.hitStats.get(0);
+//            if(energy > 80) return this.hitStats.get(3.0);
+//            if (energy > 15) return this.hitStats.get(2.0);
+            return this.hitStats.get(1.0);
         }
 
         public TargetingMode getNextTargetingMode(double energy) {
