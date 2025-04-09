@@ -185,13 +185,14 @@ public class NoobSlayer2000 extends AdvancedRobot {
     private void onScannedRobotGun(ScannedRobotEvent event, RobotData enemy, double enemyAbsoluteBearing) {
         int lateralDirection = (int) Math.signum(event.getVelocity() * Math.sin(event.getHeadingRadians() - enemyAbsoluteBearing));
         double bulletPower = getBulletPower(event, enemy);
+        double bulletSpeed = calcBulletVelocity(bulletPower);
         double gunAdjust = 0.0;
 
         var targetingMode = enemy.getNextTargetingMode(event.getEnergy());
 
         Function<Integer, Double> getGunAdjustFromBinIndex = (Integer binIndex) -> {
-//            return Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + enemy.nMostVisitedBearingOffset(lateralDirection, binIndex));
-            return Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + enemy.nMostVisitedBearingOffset(lateralDirection, binIndex) * (Math.asin(8/bulletSpeed)/GUN_BINS_ANGLE_MIDDLE));
+            return Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + enemy.nMostVisitedBearingOffset(lateralDirection, binIndex));
+//            return Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + enemy.nMostVisitedBearingOffset(lateralDirection, binIndex) * (Math.asin(8/bulletSpeed)/GUN_BINS_ANGLE_MIDDLE));
         };
 
         switch (targetingMode) {
@@ -229,7 +230,8 @@ public class NoobSlayer2000 extends AdvancedRobot {
                             (Point2D.Double) myPos.clone(),
                             calcBulletVelocity(bulletPower),
                             enemyAbsoluteBearing,
-                            lateralDirection
+                            lateralDirection,
+                            true
                     ));
 
                     // remove old gun waves
@@ -241,8 +243,22 @@ public class NoobSlayer2000 extends AdvancedRobot {
             } else {
                 gunTurnTolerance = Math.min(GUN_TURN_TOLERANCE_MAX, gunTurnTolerance + GUN_TURN_TOLERANCE_STEP);
             }
+        }  else {
+            if (waveCnt == 10) {
+                enemy.gunWaves.add(new GunWave(
+                        enemy,
+                        (Point2D.Double) myPos.clone(),
+                        calcBulletVelocity(bulletPower),
+                        enemyAbsoluteBearing,
+                        lateralDirection,
+                        false
+                ));
+                waveCnt = 0;
+            }
+            waveCnt++;
         }
     }
+    private int waveCnt = 0;
 
     private void onScannedRobotDoRadar(ScannedRobotEvent event, RobotData enemy, double absoluteBearing) {
         switch (mode) {
@@ -722,7 +738,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
     static class GunWave {
         RobotData robotData;
         Point2D.Double center = new Point2D.Double();
-        double velocity;
+        double bulletVelocity;
         double progress;
         double bearingOffset /* to direct angle to enemy when we shot */;
         int lateralDirection /* of enemy towards us when we shot */;
@@ -735,7 +751,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
         public GunWave(RobotData robotData, Point2D.Double center, double bulletVelocity, double bearingOffset, int lateralDirection, boolean hasShot) {
             this.robotData = robotData;
             this.center = center;
-            this.velocity = velocity;
+            this.bulletVelocity = bulletVelocity;
             this.bearingOffset = bearingOffset;
             this.lateralDirection = lateralDirection;
             this.distanceIndex = robotData.getDistanceIndex();
@@ -1047,7 +1063,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
             }
         }
 
-        int mostVisitedBin() {
+        public int mostVisitedBin() {
             int[] angleStats = gunStats[getDistanceIndex()][getVelocityIndex()][getLastVelocityIndex()];
             int mostVisited = GUN_BINS_ANGLE_MIDDLE;
 
@@ -1090,7 +1106,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
 
         // TODO - is this any good ???
-        int antiSurferTargetBin() {
+        public int antiSurferTargetBin() {
             int[] angleStats = gunStats[getDistanceIndex()][getVelocityIndex()][getLastVelocityIndex()];
             int max = Arrays.stream(angleStats).max().orElse(1);
 
