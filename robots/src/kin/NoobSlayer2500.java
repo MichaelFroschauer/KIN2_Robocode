@@ -805,8 +805,8 @@ public class NoobSlayer2500 extends AdvancedRobot {
                 int centerOffset = 2; // position of the central value (corresponds to +6)
                 for (int i = -2; i <= 2; i++) {
                     int targetAngleIndex = angleIndex + i;
-                    if (targetAngleIndex >= 0 && targetAngleIndex < robotData.getAngleStats().length) {
-                        robotData.getAngleStats()[targetAngleIndex] += smoothing[i + centerOffset];
+                    if (targetAngleIndex >= 0 && targetAngleIndex < robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex].length) {
+                        robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex][targetAngleIndex] += smoothing[i + centerOffset];
                     }
                 }
             }
@@ -814,7 +814,7 @@ public class NoobSlayer2500 extends AdvancedRobot {
 
         public void print(Graphics2D g) {
 
-            int[] angleStats = robotData.getAngleStats();
+            int[] angleStats = robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex];
 
             // Find max count for normalization
             int maxCount = 0;
