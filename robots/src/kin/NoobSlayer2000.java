@@ -185,7 +185,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
     }
 
     enum TargetingMode {
-                CALC,
+//                CALC,
         MOST_VISITED,
 //        SECOND_MOST_VISITED,
 //        LEAST_VISITED_GAP,
@@ -207,9 +207,9 @@ public class NoobSlayer2000 extends AdvancedRobot {
         };
 
         switch (targetingMode) {
-            case TargetingMode.CALC -> {
-                gunAdjust = getCalculatedGunBearingAdjustment(event);
-            }
+//            case TargetingMode.CALC -> {
+//                gunAdjust = getCalculatedGunBearingAdjustment(event);
+//            }
             case TargetingMode.MOST_VISITED -> {
 //                var index = enemy.nMostVisitedBin(1);
                 var index = enemy.mostVisitedBinSmoothed();
@@ -816,10 +816,10 @@ public class NoobSlayer2000 extends AdvancedRobot {
             if (angleIndex >= 0) {
                 //System.out.println("angleIndex: " + angleIndex);
 //                robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex][angleIndex]++; // TODO: bin smoothing
-                int[] shotSmoothing = {20, 60, 120, 60, 20};
-                int[] noShotSmoothing = {10, 30, 60, 30, 10};
-//                int[] shotSmoothing = {2, 6, 12, 6, 2};
-//                int[] noShotSmoothing = {1, 3, 6, 3, 1};
+//                int[] shotSmoothing = {20, 60, 120, 60, 20};
+//                int[] noShotSmoothing = {10, 30, 60, 30, 10};
+                int[] shotSmoothing = {2, 6, 12, 6, 2};
+                int[] noShotSmoothing = {1, 3, 6, 3, 1};
                 int[] smoothing = hasShot ? shotSmoothing : noShotSmoothing; // relative weights
                 int centerOffset = 2; // position of the central value (corresponds to +6)
                 for (int i = -2; i <= 2; i++) {
@@ -952,21 +952,18 @@ public class NoobSlayer2000 extends AdvancedRobot {
                 gunWave.update();
             }
 
-            var decay = 0.97;
-//            ticks++;
-//            if (ticks > 200) {
+            if (ticks > 200) {
                 for (int a = 0; a < gunStats.length; a++) {
                     for (int b = 0; b < gunStats[a].length; b++) {
                         for (int c = 0; c < gunStats[a][b].length; c++) {
                             for (int d = 0; d < gunStats[a][b][c].length; d++) {
-//                                gunStats[a][b][c][d] = Math.max(1, --gunStats[a][b][c][d]);
-                                gunStats[a][b][c][d] = Math.max(1, (int)(gunStats[a][b][c][d] * decay));
+                                gunStats[a][b][c][d] = Math.max(1, --gunStats[a][b][c][d]);
                             }
                         }
                     }
                 }
-//                ticks = 0;
-//            }
+                ticks = 0;
+            }
 
         }
 
