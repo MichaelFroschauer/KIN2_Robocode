@@ -28,6 +28,8 @@ import java.util.function.Function;
  * - - the angle towards the position the enemy saw us at (so looking directly at us),
  * - - and where he must have shot instead to land a hit on us.
  * - b) Then, mark those angle offset as more dangerous (using a number of risk scores, called buckets)
+ * - - - a) Bin Smoothing: Exactly matching bin is incremented, but those surrounding also by a lower amount
+ * - c) Also segment by other factors like distance to enemy, bullet speed, ...
  * 2) When we need to calculate the riskiness of a position and wave,
  * we simply check which offset angle the enemy would have had those choose to hit that position when shooting,
  * and check the risk value stored in the corresponding bucket.
@@ -36,7 +38,7 @@ import java.util.function.Function;
 /**
  * after N hits, switch to random movement (semi-'stop and go') for M ticks
  */
-public class NoobSlayer2000 extends AdvancedRobot {
+public class NoobSlayer2500 extends AdvancedRobot {
 
     private static final double NINETY_DEG_RAD = Math.PI / 2;
     private static final double SLIGHTLY_BELOW_NINETY_DEG_RAD = Math.toRadians(72); // to gain distance on enemies
@@ -73,6 +75,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
     private Mode mode;
     private double gunTurnTolerance = 0.1;
     private TargetingMode lastTargetingMode = TargetingMode.values()[0];
+    private int waveTickCounter = 0;
 
     // stop and go
     private int stopAndGoDirection = 1;
@@ -86,6 +89,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
     private long stopAndGoEndTime;
 
     public static double battlefieldWidth = 0;
+    public static double battlefieldHeight = 0;
     private static int round = 0;
 
     // for debugging
@@ -94,6 +98,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
     // ------------ main functions ------------
     public void run() {
         battlefieldWidth = getBattleFieldWidth();
+        battlefieldHeight = getBattleFieldHeight();
         round = getRoundNum();
         for (RobotData enemy : enemies.values()) {
             enemy.reset();
@@ -185,54 +190,45 @@ public class NoobSlayer2000 extends AdvancedRobot {
     }
 
     enum TargetingMode {
-//                CALC,
+                CALC,
         MOST_VISITED,
-//        SECOND_MOST_VISITED,
-//        LEAST_VISITED_GAP,
-//        GUESS_LEAST_VISITED_NEAREST_MOST_VISITED
-//        kNN,
+        SECOND_MOST_VISITED,
+        LEAST_VISITED_GAP,
+        GUESS_LEAST_VISITED_NEAREST_MOST_VISITED
     }
 
     private void onScannedRobotGun(ScannedRobotEvent event, RobotData enemy, double enemyAbsoluteBearing) {
         int lateralDirection = (int) Math.signum(event.getVelocity() * Math.sin(event.getHeadingRadians() - enemyAbsoluteBearing));
         double bulletPower = getBulletPower(event, enemy);
-        double bulletSpeed = calcBulletVelocity(bulletPower);
         double gunAdjust = 0.0;
 
-        var targetingMode = enemy.getNextTargetingMode(event.getEnergy());
+        var targetingMode = enemy.getNextTargetingMode();
 
         Function<Integer, Double> getGunAdjustFromBinIndex = (Integer binIndex) -> {
-            return Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + enemy.nMostVisitedBearingOffset(lateralDirection, binIndex));
-//            return Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + enemy.nMostVisitedBearingOffset(lateralDirection, binIndex) * (Math.asin(8/bulletSpeed)/GUN_BINS_ANGLE_MIDDLE));
+            return Utils.normalRelativeAngle(enemyAbsoluteBearing - getGunHeadingRadians() + enemy.getBearingOffset(lateralDirection, binIndex));
         };
 
         switch (targetingMode) {
-//            case TargetingMode.CALC -> {
-//                gunAdjust = getCalculatedGunBearingAdjustment(event);
-//            }
+            case TargetingMode.CALC -> {
+                gunAdjust = getCalculatedGunBearingAdjustment(event);
+            }
             case TargetingMode.MOST_VISITED -> {
-//                var index = enemy.nMostVisitedBin(1);
                 var index = enemy.mostVisitedBinSmoothed();
                 gunAdjust = getGunAdjustFromBinIndex.apply(index);
             }
-//            case TargetingMode.SECOND_MOST_VISITED -> {
-//                gunAdjust = getGunAdjustFromBinIndex.apply(enemy.nMostVisitedBin(2));;
-//            }
-//            case TargetingMode.LEAST_VISITED_GAP -> {
-//                gunAdjust = getGunAdjustFromBinIndex.apply(enemy.leastVisitedGapCenter());
-//            }
-//            case TargetingMode.GUESS_LEAST_VISITED_NEAREST_MOST_VISITED -> {
-//                gunAdjust = getGunAdjustFromBinIndex.apply(enemy.leastVisitedClosestToMostVisitedBin());
-//            }
-//            case kNN -> {
-//                var index = enemy.getKnnTargetBin(35); // try k=25, tweak as needed
-//                gunAdjust = getGunAdjustFromBinIndex.apply(index);
-//            }
+            case TargetingMode.SECOND_MOST_VISITED -> {
+                gunAdjust = getGunAdjustFromBinIndex.apply(enemy.nMostVisitedBin(2));;
+            }
+            case TargetingMode.LEAST_VISITED_GAP -> {
+                gunAdjust = getGunAdjustFromBinIndex.apply(enemy.leastVisitedGapCenter());
+            }
+            case TargetingMode.GUESS_LEAST_VISITED_NEAREST_MOST_VISITED -> {
+                gunAdjust = getGunAdjustFromBinIndex.apply(enemy.leastVisitedClosestToMostVisitedBin());
+            }
         }
 
         setTurnGunRightRadians(gunAdjust);
-
-        //out.println("GunTurnTolerance: " + gunTurnTolerance);
+        
         if (getEnergy() > GUN_MIN_SHOOTING_ENERGY && getGunHeat() == 0) {
             if (Math.abs(getGunTurnRemaining()) < gunTurnTolerance) {
                 Bullet bullet = setFireBullet(bulletPower);
@@ -252,6 +248,9 @@ public class NoobSlayer2000 extends AdvancedRobot {
                     // remove old gun waves
                     List<GunWave> gunWavesToRemove = enemy.gunWaves.stream().filter(gw -> gw.canBeRemoved).toList();
                     enemy.gunWaves.removeAll(gunWavesToRemove);
+                    var hitStat = enemy.hitStats.getOrDefault(targetingMode, new RobotData.HitStatValue());
+                    hitStat.shot++;
+                    enemy.hitStats.put(targetingMode, hitStat);
 
                     gunTurnTolerance = Math.max(GUN_TURN_TOLERANCE_STEP, gunTurnTolerance - GUN_TURN_TOLERANCE_STEP);
                 }
@@ -259,7 +258,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
                 gunTurnTolerance = Math.min(GUN_TURN_TOLERANCE_MAX, gunTurnTolerance + GUN_TURN_TOLERANCE_STEP);
             }
         } else {
-            if (waveCnt == 10) {
+            if (waveTickCounter == 10) {
                 enemy.gunWaves.add(new GunWave(
                         enemy,
                         (Point2D.Double) myPos.clone(),
@@ -268,13 +267,11 @@ public class NoobSlayer2000 extends AdvancedRobot {
                         lateralDirection,
                         false
                 ));
-                waveCnt = 0;
+                waveTickCounter = 0;
             }
-            waveCnt++;
+            waveTickCounter++;
         }
     }
-
-    private int waveCnt = 0;
 
     private void onScannedRobotDoRadar(ScannedRobotEvent event, RobotData enemy, double absoluteBearing) {
         switch (mode) {
@@ -607,10 +604,10 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
     private void onBulletHitGun(BulletHitEvent event, RobotData enemy) {
         var targetingMode = bullets.get(event.getBullet().hashCode());
-        var stats = enemy.getHitStatsByHeuristic(event.getEnergy());
-        var v = stats.getOrDefault(targetingMode, 0);
+        var v = enemy.hitStats.getOrDefault(targetingMode, new RobotData.HitStatValue());
 
-        stats.put(targetingMode, ++v);
+        v.hit++;
+        enemy.hitStats.put(targetingMode, v);
         enemy.hitsTotal++;
 
         out.println(enemy + " - hit with " + targetingMode.toString());
@@ -762,7 +759,8 @@ public class NoobSlayer2000 extends AdvancedRobot {
         boolean hasShot = false;
         boolean canBeRemoved = false;
 
-        public GunWave(RobotData robotData, Point2D.Double center, double bulletVelocity, double bearingOffset, int lateralDirection, boolean hasShot) {
+        public GunWave(RobotData robotData, Point2D.Double center, double bulletVelocity,
+                       double bearingOffset, int lateralDirection, boolean hasShot) {
             this.robotData = robotData;
             this.center = center;
             this.bulletVelocity = bulletVelocity;
@@ -781,21 +779,10 @@ public class NoobSlayer2000 extends AdvancedRobot {
                 return;
             }
 
-            if (progress > NoobSlayer2000.battlefieldWidth) {
+            if (progress > NoobSlayer2500.battlefieldWidth) {
                 canBeRemoved = true;
                 return;
             }
-
-//            double distance = center.distance(robotData.pos);
-//            if (progress > distance - 18) {
-//                int distanceIndex = robotData.getDistanceIndex();
-//                int velocityIndex = robotData.getVelocityIndex();
-//                int lastVelocityIndex = robotData.getLastVelocityIndex();
-//                int angleIndex = calcAngleIndex();
-//
-//                System.out.println("angleIndex: " + angleIndex);
-//                if (angleIndex < 0 || angleIndex >= GUN_NUM_BINS_ANGLE)
-//                    return;
 
             var angleIndex = -1;
             var currentMinDistance = Double.MAX_VALUE;
@@ -811,52 +798,23 @@ public class NoobSlayer2000 extends AdvancedRobot {
                 }
             }
 
-            //double angle = bearingOffset + lateralDirection * GUN_BINS_ANGLE_MIDDLE * GUN_BIN_WIDTH_ANGLE;
-
             if (angleIndex >= 0) {
-                //System.out.println("angleIndex: " + angleIndex);
-//                robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex][angleIndex]++; // TODO: bin smoothing
-//                int[] shotSmoothing = {20, 60, 120, 60, 20};
-//                int[] noShotSmoothing = {10, 30, 60, 30, 10};
                 int[] shotSmoothing = {2, 6, 12, 6, 2};
                 int[] noShotSmoothing = {1, 3, 6, 3, 1};
                 int[] smoothing = hasShot ? shotSmoothing : noShotSmoothing; // relative weights
                 int centerOffset = 2; // position of the central value (corresponds to +6)
                 for (int i = -2; i <= 2; i++) {
                     int targetAngleIndex = angleIndex + i;
-                    if (targetAngleIndex >= 0 && targetAngleIndex < robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex].length) {
-                        robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex][targetAngleIndex] += smoothing[i + centerOffset];
+                    if (targetAngleIndex >= 0 && targetAngleIndex < robotData.getAngleStats().length) {
+                        robotData.getAngleStats()[targetAngleIndex] += smoothing[i + centerOffset];
                     }
                 }
-
-                GunWaveHistoryPoint dp = new GunWaveHistoryPoint();
-                dp.round = round;
-                dp.distanceIndex = distanceIndex;
-                dp.velocityIndex = velocityIndex;
-                dp.lastVelocityIndex = lastVelocityIndex;
-                dp.angleIndex = angleIndex;
-                robotData.gunWaveHistory.add(dp);
-
-                // Optional: cap history size to prevent memory bloat
-                if (robotData.gunWaveHistory.size() > 500) {
-                    robotData.gunWaveHistory.remove(0);
-                }
-//                canBeRemoved = true;
             }
-//            }
-        }
-
-        public class GunWaveHistoryPoint {
-            int distanceIndex;
-            int velocityIndex;
-            int lastVelocityIndex;
-            int angleIndex; // target bin
-            int round;
         }
 
         public void print(Graphics2D g) {
 
-            int[] angleStats = robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex];
+            int[] angleStats = robotData.getAngleStats();
 
             // Find max count for normalization
             int maxCount = 0;
@@ -902,19 +860,14 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
         // gun stuff
         private int[][][][] gunStats = new int[GUN_NUM_BINS_DISTANCE][GUN_NUM_BINS_VELOCITY][GUN_NUM_BINS_VELOCITY][GUN_NUM_BINS_ANGLE];
-        List<GunWave.GunWaveHistoryPoint> gunWaveHistory = new ArrayList<>();
         List<GunWave> gunWaves = new ArrayList<>();
-        HashMap<Double, HashMap<TargetingMode, Integer>> hitStats = Arrays.stream(new double[]{1, 2, 3}).collect( //TODO: set levels correctly
+        HashMap<TargetingMode, HitStatValue> hitStats = Arrays.stream(TargetingMode.values()).collect(
                 HashMap::new,
-                (m, v) -> m.put(v, Arrays.stream(TargetingMode.values()).collect(
-                        HashMap::new,
-                        (m2, v2) -> m2.put(v2, 0),
-                        HashMap::putAll
-                )),
+                (m2, v2) -> m2.put(v2, new HitStatValue()),
                 HashMap::putAll
         );
         int bulletsFired;
-        int hitsTotal = 0;
+        static int hitsTotal = 0;
 
         Point2D.Double pos = new Point2D.Double();
         double distance;
@@ -941,7 +894,6 @@ public class NoobSlayer2000 extends AdvancedRobot {
             energyLevels = new LinkedList<>();
 
             gunWaves = new ArrayList<>();
-//            gunWaveHistory = new ArrayList<>();
 
             pos = new Point2D.Double();
         }
@@ -967,27 +919,15 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
         }
 
-        private HashMap<TargetingMode, Integer> getHitStatsByHeuristic(double energy) {
-//            if(energy > 80) return this.hitStats.get(3.0);
-//            if (energy > 15) return this.hitStats.get(2.0);
-            return this.hitStats.get(1.0);
-        }
+        public TargetingMode getNextTargetingMode() {
 
-        public TargetingMode getNextTargetingMode(double energy) {
-            TargetingMode[] modes = TargetingMode.values();
+            var calcStat = hitStats.get(TargetingMode.CALC);
 
-            // TODO add hit-rate instead of absolute hits
-            if (hitsTotal <= 1) {
-                return modes[RANDOM.nextInt(modes.length)];
+            if (calcStat.shot < 15 || calcStat.hit >= 5) {
+                return TargetingMode.CALC;
             }
 
-            int[] modeStats = new int[modes.length];
-            for (Map.Entry<TargetingMode, Integer> entry : getHitStatsByHeuristic(energy).entrySet()) {
-                modeStats[entry.getKey().ordinal()] = entry.getValue();
-            }
-
-            int selectedIndex = rouletteWheel(modeStats);
-            return modes[selectedIndex];
+            return TargetingMode.MOST_VISITED;
         }
 
         private int rouletteWheel(int[] stats) {
@@ -1007,16 +947,12 @@ public class NoobSlayer2000 extends AdvancedRobot {
                 }
             }
 
-            return 0; // can't happen
+            return RANDOM.nextInt(stats.length);
         }
 
         // Method to calculate the bearing offset where the target was most frequently encountered
-        double nMostVisitedBearingOffset(int lateralDirection, int binIndex) {
+        double getBearingOffset(int lateralDirection, int binIndex) {
             return (lateralDirection * GUN_BIN_WIDTH_ANGLE) * (binIndex - GUN_BINS_ANGLE_MIDDLE);
-        }
-
-        double leastVisitedNearestBearingOffset(int lateralDirection) {
-            return (lateralDirection * GUN_BIN_WIDTH_ANGLE) * (leastVisitedClosestToMostVisitedBin() - GUN_BINS_ANGLE_MIDDLE);
         }
 
         int getDistanceIndex() {
@@ -1031,8 +967,12 @@ public class NoobSlayer2000 extends AdvancedRobot {
             return (int) Math.abs(lastVelocity / 2);
         }
 
+        int[] getAngleStats() {
+            return gunStats[getDistanceIndex()][getVelocityIndex()][getLastVelocityIndex()];
+        }
+
         public int nMostVisitedBin(int n) {
-            int[] angleStats = gunStats[getDistanceIndex()][getVelocityIndex()][getLastVelocityIndex()];
+            int[] angleStats = getAngleStats();
             PriorityQueue<Integer> pq = new PriorityQueue<>(Comparator.comparingInt(i -> angleStats[i]));
 
             for (int i = 0; i < angleStats.length; i++) {
@@ -1057,14 +997,13 @@ public class NoobSlayer2000 extends AdvancedRobot {
         }
 
         public int leastVisitedGapCenter() {
-            int[] angleStats = gunStats[getDistanceIndex()][getVelocityIndex()][getLastVelocityIndex()];
+            int[] angleStats = getAngleStats();
             PriorityQueue<List<Integer>> gaps = new PriorityQueue<>(new GapComparator(angleStats));
 
             var min = Arrays.stream(angleStats).min().orElse(0);
             var max = Arrays.stream(angleStats).max().orElse(0);
 
             int thresh = min + (int) (0.02 * max);
-//            System.out.println("min: " + min + " max: "+ max + " thresh: " + thresh);
 
             List<Integer> currentList = new ArrayList<>();
             gaps.add(currentList);
@@ -1124,54 +1063,13 @@ public class NoobSlayer2000 extends AdvancedRobot {
             }
         }
 
-        public int getKnnTargetBin(int k) {
-            List<GunWave.GunWaveHistoryPoint> history = gunWaveHistory;
-            if (history.size() < k) return mostVisitedBin(); // fallback
-
-            int dIdx = getDistanceIndex();
-            int vIdx = getVelocityIndex();
-            int lvIdx = getLastVelocityIndex();
-
-            PriorityQueue<Map.Entry<Integer, Integer>> freq = new PriorityQueue<>(
-                    (a, b) -> Integer.compare(b.getValue(), a.getValue())
-            );
-            Map<Integer, Integer> binVotes = new HashMap<>();
-
-            history.stream()
-                    .sorted(Comparator.comparingInt(dp ->
-                            Math.abs(dp.distanceIndex - dIdx)
-                                    + Math.abs(dp.velocityIndex - vIdx)
-                                    + Math.abs(dp.lastVelocityIndex - lvIdx)
-                    ))
-                    .limit(k)
-                    .forEach(dp -> binVotes.merge(dp.angleIndex, 1, Integer::sum));
-
-            freq.addAll(binVotes.entrySet());
-
-            return freq.peek().getKey();
-        }
-
-        public int mostVisitedBin() {
-            int[] angleStats = gunStats[getDistanceIndex()][getVelocityIndex()][getLastVelocityIndex()];
-            int mostVisited = GUN_BINS_ANGLE_MIDDLE;
-
-            for (int i = 0; i < GUN_NUM_BINS_ANGLE; i++) {
-                // Compare the number of visits for each bin and select the most visited one
-                if (angleStats[i] > angleStats[mostVisited]) {
-                    mostVisited = i;
-                }
-            }
-
-            return mostVisited;
-        }
-
         public int mostVisitedBinSmoothed() {
-            int[] angleStats = gunStats[getDistanceIndex()][getVelocityIndex()][getLastVelocityIndex()];
+            int[] angleStats = getAngleStats();
             return rouletteWheel(angleStats);
         }
 
         public int leastVisitedClosestToMostVisitedBin() {
-            int[] angleStats = gunStats[getDistanceIndex()][getVelocityIndex()][getLastVelocityIndex()];
+            int[] angleStats = getAngleStats();
             int mostVisited = nMostVisitedBin(1);
 
             int leastVisited = -1;
@@ -1192,21 +1090,6 @@ public class NoobSlayer2000 extends AdvancedRobot {
             return leastVisited;
         }
 
-
-        // TODO - is this any good ???
-        public int antiSurferTargetBin() {
-            int[] angleStats = gunStats[getDistanceIndex()][getVelocityIndex()][getLastVelocityIndex()];
-            int max = Arrays.stream(angleStats).max().orElse(1);
-
-            int[] invertedStats = new int[angleStats.length];
-            for (int i = 0; i < angleStats.length; i++) {
-                invertedStats[i] = max - angleStats[i] + 1;
-            }
-
-            var i = rouletteWheel(invertedStats);
-            return invertedStats[i];
-        }
-
         static class TimestampedEntry<T> {
             T value;
             long timestamp;
@@ -1216,8 +1099,17 @@ public class NoobSlayer2000 extends AdvancedRobot {
                 this.value = value;
             }
         }
-    }
 
+        public static class HitStatValue {
+            public int hit;
+            public int shot;
+
+            public double getHitRatio() {
+                if(shot == 0) return 1;
+                return (double)hit / shot;
+            }
+        }
+    }
 
     private enum MovementType {
         TRUE_SURFING,
@@ -1271,7 +1163,8 @@ public class NoobSlayer2000 extends AdvancedRobot {
     // calculation from wiki adjusts angle to prevent bot from running into wall by iteratively checking and reducing said angle
 // also considers enemies
     public double wallAndEnemySmoothing(Point2D.Double botLocation, double angle, int orientation) {
-        final double collisionRadius = 80; // robot is 36x36 according to wiki
+        // robot is 36x36 according to wiki
+        final double collisionRadius = 100;
         int iterations = 0;
 
         while (++iterations < 100) {
@@ -1296,44 +1189,9 @@ public class NoobSlayer2000 extends AdvancedRobot {
             }
 
             if (targetAreaCheck && enemyBotCheck) break;
-            angle += orientation * (enemyBotCheck ? 0.05 : 0.5);
+            angle += orientation * (enemyBotCheck ? 0.05 : mode == Mode.MELEE ? 0.2 : (Math.PI / 2));
         }
         return Utils.normalAbsoluteAngle(angle);
-    }
-
-    private double getBulletPower2(ScannedRobotEvent e, RobotData enemy) {
-        return 2 - Math.max(0, (30 - getEnergy()) / 16);
-    }
-
-    private double getBulletPower3(ScannedRobotEvent e, RobotData enemy) {
-
-        double myEnergy = getEnergy();
-        double maxBulletPower = 3.0;  // Maximum value for damage
-        double minBulletPower = 0.1;  // Prevents energy waste
-        double enemyDistance = e.getDistance();
-        double enemyEnergy = e.getEnergy();
-
-        //System.out.println("distance: " + distance + ", myEnergy: " + myEnergy + ", Optimal Firepower: " + lastEnemyEnergy / 4);
-
-        // If hit before, adjust firepower
-        if (enemyEnergy != 0.0 && enemyEnergy < 15) {
-            // https://robowiki.net/wiki/Selecting_Fire_Power
-            double firePower = Math.min(enemyEnergy / 4, maxBulletPower);
-            return Math.max(firePower, minBulletPower);
-        }
-
-        if (myEnergy < 10) {
-            return 0.5;
-        }
-
-        // Dynamic adaptation to distance
-        if (enemyDistance > 400) {
-            return 1.0;
-        } else if (enemyDistance > 200) {
-            return 2.0;
-        }
-
-        return maxBulletPower;
     }
 
 
@@ -1401,8 +1259,6 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
         var delta = targetHeading - getGunHeading();
 
-        //System.out.println("gunHeading: " + getGunHeading() + ", targetHeading: " + targetHeading + ", delta: " + delta);
-
         return degreesToRadians(Utils.normalRelativeAngleDegrees(delta));
     }
 
@@ -1441,4 +1297,3 @@ public class NoobSlayer2000 extends AdvancedRobot {
         return value;
     }
 }
-
