@@ -185,7 +185,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
     }
 
     enum TargetingMode {
-        //        CALC,
+                CALC,
         MOST_VISITED,
 //        SECOND_MOST_VISITED,
 //        LEAST_VISITED_GAP,
@@ -207,9 +207,9 @@ public class NoobSlayer2000 extends AdvancedRobot {
         };
 
         switch (targetingMode) {
-//            case TargetingMode.CALC -> {
-//                gunAdjust = getCalculatedGunBearingAdjustment(event);
-//            }
+            case TargetingMode.CALC -> {
+                gunAdjust = getCalculatedGunBearingAdjustment(event);
+            }
             case TargetingMode.MOST_VISITED -> {
 //                var index = enemy.nMostVisitedBin(1);
                 var index = enemy.mostVisitedBinSmoothed();
@@ -258,7 +258,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
             } else {
                 gunTurnTolerance = Math.min(GUN_TURN_TOLERANCE_MAX, gunTurnTolerance + GUN_TURN_TOLERANCE_STEP);
             }
-        }  else {
+        } else {
             if (waveCnt == 10) {
                 enemy.gunWaves.add(new GunWave(
                         enemy,
@@ -273,6 +273,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
             waveCnt++;
         }
     }
+
     private int waveCnt = 0;
 
     private void onScannedRobotDoRadar(ScannedRobotEvent event, RobotData enemy, double absoluteBearing) {
@@ -358,9 +359,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
         // update gun stats
         for (RobotData enemy : enemies.values()) {
-            for (GunWave gunWave : enemy.gunWaves) {
-                gunWave.update();
-            }
+            enemy.update();
         }
 
         // radar stuff
@@ -778,7 +777,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
         public void update() {
             progress += bulletVelocity;
 
-            if (canBeRemoved){
+            if (canBeRemoved) {
                 return;
             }
 
@@ -817,16 +816,18 @@ public class NoobSlayer2000 extends AdvancedRobot {
             if (angleIndex >= 0) {
                 //System.out.println("angleIndex: " + angleIndex);
 //                robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex][angleIndex]++; // TODO: bin smoothing
-                    int[] shotSmoothing = {2, 6, 12, 6, 2};
-                    int[] noShotSmoothing = {1, 3, 6, 3, 1};
-                    int[] smoothing = hasShot ? shotSmoothing : noShotSmoothing ; // relative weights
-                    int centerOffset = 2; // position of the central value (corresponds to +6)
-                    for (int i = -2; i <= 2; i++) {
-                        int targetAngleIndex = angleIndex + i;
-                        if (targetAngleIndex >= 0 && targetAngleIndex < robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex].length) {
-                            robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex][targetAngleIndex] += smoothing[i + centerOffset];
-                        }
+                int[] shotSmoothing = {20, 60, 120, 60, 20};
+                int[] noShotSmoothing = {10, 30, 60, 30, 10};
+//                int[] shotSmoothing = {2, 6, 12, 6, 2};
+//                int[] noShotSmoothing = {1, 3, 6, 3, 1};
+                int[] smoothing = hasShot ? shotSmoothing : noShotSmoothing; // relative weights
+                int centerOffset = 2; // position of the central value (corresponds to +6)
+                for (int i = -2; i <= 2; i++) {
+                    int targetAngleIndex = angleIndex + i;
+                    if (targetAngleIndex >= 0 && targetAngleIndex < robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex].length) {
+                        robotData.gunStats[distanceIndex][velocityIndex][lastVelocityIndex][targetAngleIndex] += smoothing[i + centerOffset];
                     }
+                }
 
                 GunWaveHistoryPoint dp = new GunWaveHistoryPoint();
                 dp.round = round;
@@ -903,7 +904,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
         private int[][][][] gunStats = new int[GUN_NUM_BINS_DISTANCE][GUN_NUM_BINS_VELOCITY][GUN_NUM_BINS_VELOCITY][GUN_NUM_BINS_ANGLE];
         List<GunWave.GunWaveHistoryPoint> gunWaveHistory = new ArrayList<>();
         List<GunWave> gunWaves = new ArrayList<>();
-        HashMap<Double, HashMap<TargetingMode, Integer>> hitStats = Arrays.stream(new double[] {1, 2, 3}).collect( //TODO: set levels correctly
+        HashMap<Double, HashMap<TargetingMode, Integer>> hitStats = Arrays.stream(new double[]{1, 2, 3}).collect( //TODO: set levels correctly
                 HashMap::new,
                 (m, v) -> m.put(v, Arrays.stream(TargetingMode.values()).collect(
                         HashMap::new,
@@ -945,6 +946,30 @@ public class NoobSlayer2000 extends AdvancedRobot {
             pos = new Point2D.Double();
         }
 
+        static int ticks = 0;
+        public void update() {
+            for (GunWave gunWave : gunWaves) {
+                gunWave.update();
+            }
+
+            var decay = 0.97;
+//            ticks++;
+//            if (ticks > 200) {
+                for (int a = 0; a < gunStats.length; a++) {
+                    for (int b = 0; b < gunStats[a].length; b++) {
+                        for (int c = 0; c < gunStats[a][b].length; c++) {
+                            for (int d = 0; d < gunStats[a][b][c].length; d++) {
+//                                gunStats[a][b][c][d] = Math.max(1, --gunStats[a][b][c][d]);
+                                gunStats[a][b][c][d] = Math.max(1, (int)(gunStats[a][b][c][d] * decay));
+                            }
+                        }
+                    }
+                }
+//                ticks = 0;
+//            }
+
+        }
+
         private HashMap<TargetingMode, Integer> getHitStatsByHeuristic(double energy) {
 //            if(energy > 80) return this.hitStats.get(3.0);
 //            if (energy > 15) return this.hitStats.get(2.0);
@@ -954,6 +979,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
         public TargetingMode getNextTargetingMode(double energy) {
             TargetingMode[] modes = TargetingMode.values();
 
+            // TODO add hit-rate instead of absolute hits
             if (hitsTotal <= 1) {
                 return modes[RANDOM.nextInt(modes.length)];
             }
@@ -1040,7 +1066,7 @@ public class NoobSlayer2000 extends AdvancedRobot {
             var min = Arrays.stream(angleStats).min().orElse(0);
             var max = Arrays.stream(angleStats).max().orElse(0);
 
-            int thresh = min + (int)(0.02 * max);
+            int thresh = min + (int) (0.02 * max);
 //            System.out.println("min: " + min + " max: "+ max + " thresh: " + thresh);
 
             List<Integer> currentList = new ArrayList<>();
@@ -1196,8 +1222,6 @@ public class NoobSlayer2000 extends AdvancedRobot {
     }
 
 
-
-
     private enum MovementType {
         TRUE_SURFING,
         STOP_AND_GO
@@ -1317,23 +1341,22 @@ public class NoobSlayer2000 extends AdvancedRobot {
 
 
     private double getBulletPower(ScannedRobotEvent e, RobotData enemy) {
-        return 1.9;
-//        double bulletPower = 2.95;
-//        var maxEnemyEnergy = enemy.energyLevels.stream().max(Comparator.comparingDouble(x -> x.timestamp)).get().value;
-//        bulletPower = Math.min(bulletPower, (maxEnemyEnergy + 0.01) / 4);
-//
-//        var minDist = e.getDistance();
-//        var botEnergy = getEnergy();
-//
-//        if (minDist > 150 && getOthers() == 1)
-//            bulletPower = Math.min(bulletPower, 1.95);
-//
-//        if (minDist > 150)
-//            bulletPower = Math.min(bulletPower, botEnergy / 20);
-//        else
-//            bulletPower = Math.min(bulletPower, botEnergy - 0.1);
-//
-//        return Math.min(bulletPower, 1300 / minDist);
+        double bulletPower = 2.95;
+        var maxEnemyEnergy = enemy.energyLevels.stream().max(Comparator.comparingDouble(x -> x.timestamp)).get().value;
+        bulletPower = Math.min(bulletPower, (maxEnemyEnergy + 0.01) / 4);
+
+        var minDist = e.getDistance();
+        var botEnergy = getEnergy();
+
+        if (minDist > 150 && getOthers() == 1)
+            bulletPower = Math.min(bulletPower, 1.95);
+
+        if (minDist > 150)
+            bulletPower = Math.min(bulletPower, botEnergy / 20);
+        else
+            bulletPower = Math.min(bulletPower, botEnergy - 0.1);
+
+        return Math.min(bulletPower, 1300 / minDist);
     }
 
     private double getCalculatedGunBearingAdjustment(ScannedRobotEvent e) {
